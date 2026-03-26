@@ -1,0 +1,6 @@
+.env
+OPENAI_API_KEY.txt
+OPENAI_API_KEY=*.txt
+.streamlit/secrets.toml
+__pycache__/
+*.pyc
