@@ -1201,25 +1201,47 @@ section[data-testid="stSidebar"] button[title*="password"] {
     border: none !important;
 }
 
-.how-card *,
-section[data-testid="stSidebar"] .how-card * {
+.how-card {
+    display: block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    background: #fef3c7 !important;
+    border-radius: 18px !important;
+    padding: 14px 16px !important;
+    margin: 12px 0 18px 0 !important;
+    color: #111827 !important;
+}
+
+.how-card * {
     color: #111827 !important;
     opacity: 1 !important;
     visibility: visible !important;
 }
 
-.how-title,
-section[data-testid="stSidebar"] .how-title {
+.how-card {
+    display: block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    background: #fef3c7 !important;
+    border-radius: 14px !important;
+    padding: 10px 12px !important;
+    margin: 8px 0 12px 0 !important;
+    color: #111827 !important;
+    border: 1px solid rgba(0,0,0,0.08) !important;
+}
+
+.how-title {
     color: #14532d !important;
-    font-size: 1.02rem !important;
+    font-size: 0.95rem !important;
     font-weight: 900 !important;
-    margin-bottom: 8px !important;
+    margin-bottom: 6px !important;
 }
 
 .how-text,
-section[data-testid="stSidebar"] .how-text {
+.how-text div {
     color: #111827 !important;
-    line-height: 1.7 !important;
+    font-size: 0.82rem !important;
+    line-height: 1.45 !important;
     font-weight: 700 !important;
 }
         </style>
@@ -2410,25 +2432,26 @@ def set_user_plan(plan):
 
 def is_premium():
     return get_user_plan() == PREMIUM_PLAN
-# =========================================================
-# MAIN
-# =========================================================
-def render_how_it_works() -> None:
+
+def render_how_it_works():
     st.markdown(
         """
         <div class="how-card">
-            <div class="how-title">How it works</div>
+            <div class="how-title">📘 How it works</div>
             <div class="how-text">
-                1. Upload your file (CSV, Excel, PDF, image, or ZIP)<br/>
-                2. Review overview, charts, and quick dashboard<br/>
-                3. Generate AI-powered analysis and diagnostics<br/>
-                4. Ask follow-up questions and export results<br/>
-                5. Save, share, or upgrade for premium features
+                <div>1. Upload your dataset or document.</div>
+                <div>2. Let AI analyze the content.</div>
+                <div>3. Review insights, risks, forecasts, and reports.</div>
+                <div>4. Upgrade to unlock advanced tools.</div>
             </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
+
+# =========================================================
+# MAIN
+# =========================================================
 
 def main() -> None:
     init_state()
@@ -2500,7 +2523,7 @@ def main() -> None:
         st.markdown(
             """
             <div style="
-                color:#ffffff;
+                color:#111827;
                 font-size:1.15rem;
                 font-weight:900;
                 margin:14px 0 8px 0;
@@ -2543,8 +2566,6 @@ def main() -> None:
         remaining = max(0, FREE_ANALYSIS_LIMIT - st.session_state.get("usage_count", 0))
         st.caption(f"Free analyses remaining: {remaining}")
 
-        st.markdown("---")
-        
         st.markdown("### 💎 Upgrade Your Experience")
         st.caption("Unlock advanced AI insights, reports, and decision tools.")
 
@@ -3112,6 +3133,20 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
-
+    st.markdown(
+        """
+    <div style="
+        text-align:center;
+        font-size:0.68rem;
+        color:#94a3b8;
+        margin-top:18px;
+        margin-bottom:4px;
+    ">
+        © 2026 ExplainMyData AI. All Rights Reserved.
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+    
 if __name__ == "__main__":
     main()
