@@ -148,7 +148,7 @@ def init_state() -> None:
         "support_answer": "",
         "last_saved_report_hash": "",
         "use_sample_data": False,
-        "developer_premium_override": False,
+       # "developer_premium_override": False,
         "premium_status": "inactive",
         "user_plan": "free",
         "forecast_df": None,
@@ -476,15 +476,15 @@ PREMIUM_FEATURES = {
 def get_user_plan() -> str:
     email = current_user_email()
 
-    if st.session_state.get("developer_premium_override"):
-        return PREMIUM_PLAN
     if email and email in PREMIUM_USERS:
         return PREMIUM_PLAN
+
     if st.session_state.get("premium_status") == "premium":
         return PREMIUM_PLAN
 
     return FREE_PLAN
 
+    
 
 def set_user_plan(plan_name: str) -> None:
     st.session_state["user_plan"] = plan_name
@@ -2392,14 +2392,16 @@ FREE_LIMIT = 2
 # Compatibility wrappers kept here so the later section does not erase the premium logic above.
 def get_user_plan():
     email = current_user_email()
-    if st.session_state.get("developer_premium_override"):
-        return PREMIUM_PLAN
+
     if email and email in PREMIUM_USERS:
         return PREMIUM_PLAN
+
     if st.session_state.get("premium_status") == "premium":
         return PREMIUM_PLAN
+
     if st.session_state.get("user_plan") == PREMIUM_PLAN:
         return PREMIUM_PLAN
+
     return FREE_PLAN
 
 def set_user_plan(plan):
@@ -2526,17 +2528,10 @@ def main() -> None:
                     render_message(msg, "success" if ok else "warning")
                     if ok:
                         st.rerun()
-
-            if st.button("Developer Sign In", key="dev_signin_btn", use_container_width=True):
-                st.session_state["authenticated"] = True
-                st.session_state["auth_user"] = {"email": "developer@explainmydata.ai"}
-                st.session_state["developer_premium_override"] = True
-                st.session_state["premium_status"] = "premium"
-                st.session_state["user_plan"] = "premium"
-                st.rerun()
+            
         else:
+            st.success(f"👤 {current_user_email()}")
             st.success(f"Signed in as {current_user_email()}")
-            st.checkbox("Developer Premium Override", key="developer_premium_override")
             if st.button(t("logout"), key="logout_btn", use_container_width=True):
                 logout()
                 st.rerun()
