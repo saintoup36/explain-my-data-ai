@@ -776,7 +776,7 @@ def inject_global_css() -> None:
 
         .top-green-bar {
             width: 100%;
-            height: 40px;
+            height: 14px;
             background: linear-gradient(
                 90deg,
                 #001f12,
@@ -790,13 +790,13 @@ def inject_global_css() -> None:
             );
             background-size: 450% 100%;
             animation: greenFlow 3.5s linear infinite, greenGlowPulse 2.8s ease-in-out infinite;
-            border-radius: 0 0 22px 22px;
+            border-radius: 0 0 12px 12px;
             margin-top: -4px;
             box-shadow:
-                0 8px 24px rgba(34, 197, 94, 0.75),
-                0 0 38px rgba(0, 255, 127, 0.55),
-                inset 0 -3px 10px rgba(255, 255, 255, 0.28);
-            margin-bottom: 12px;
+                0 4px 12px rgba(34, 197, 94, 0.45),
+                0 0 18px rgba(0, 255, 127, 0.30),
+                inset 0 -2px 6px rgba(255, 255, 255, 0.20);
+            margin-bottom: 4px;
         }
         
         /* Restore original sidebar background */
@@ -1218,30 +1218,18 @@ section[data-testid="stSidebar"] button[title*="password"] {
     visibility: visible !important;
 }
 
-.how-card {
-    display: block !important;
-    visibility: visible !important;
-    opacity: 1 !important;
-    background: #fef3c7 !important;
-    border-radius: 14px !important;
-    padding: 10px 12px !important;
-    margin: 8px 0 12px 0 !important;
-    color: #111827 !important;
-    border: 1px solid rgba(0,0,0,0.08) !important;
-}
-
-.how-title {
+.how-title,
+section[data-testid="stSidebar"] .how-title {
     color: #14532d !important;
-    font-size: 0.95rem !important;
+    font-size: 1.02rem !important;
     font-weight: 900 !important;
-    margin-bottom: 6px !important;
+    margin-bottom: 8px !important;
 }
 
 .how-text,
-.how-text div {
+section[data-testid="stSidebar"] .how-text {
     color: #111827 !important;
-    font-size: 0.82rem !important;
-    line-height: 1.45 !important;
+    line-height: 1.7 !important;
     font-weight: 700 !important;
 }
         </style>
@@ -2433,22 +2421,6 @@ def set_user_plan(plan):
 def is_premium():
     return get_user_plan() == PREMIUM_PLAN
 
-def render_how_it_works():
-    st.markdown(
-        """
-        <div class="how-card">
-            <div class="how-title">📘 How it works</div>
-            <div class="how-text">
-                <div>1. Upload your dataset or document.</div>
-                <div>2. Let AI analyze the content.</div>
-                <div>3. Review insights, risks, forecasts, and reports.</div>
-                <div>4. Upgrade to unlock advanced tools.</div>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
 # =========================================================
 # MAIN
 # =========================================================
@@ -2524,16 +2496,16 @@ def main() -> None:
             """
             <div style="
                 color:#111827;
-                font-size:1.15rem;
+                font-size:1.08rem;
                 font-weight:900;
-                margin:14px 0 8px 0;
+                margin:10px 0 6px 0;
             ">
                 🔐 Account Access
             </div>
             """,
             unsafe_allow_html=True,
         )
-                    
+
         if not st.session_state.get("authenticated"):
             email = st.text_input(t("email"), placeholder=t("email_placeholder"), key="sidebar_email")
             password = st.text_input(t("password"), placeholder=t("password_placeholder"), type="password", key="sidebar_password")
@@ -2545,16 +2517,15 @@ def main() -> None:
                     render_message(msg, "success" if ok else "warning")
                     if ok:
                         st.rerun()
+
             with create_col:
                 if st.button(t("create"), key="create_btn", use_container_width=True):
                     ok, msg = local_create_account(email, password)
                     render_message(msg, "success" if ok else "warning")
                     if ok:
                         st.rerun()
-            
         else:
             st.success(f"👤 {current_user_email()}")
-            st.success(f"Signed in as {current_user_email()}")
             if st.button(t("logout"), key="logout_btn", use_container_width=True):
                 logout()
                 st.rerun()
@@ -2566,8 +2537,20 @@ def main() -> None:
         remaining = max(0, FREE_ANALYSIS_LIMIT - st.session_state.get("usage_count", 0))
         st.caption(f"Free analyses remaining: {remaining}")
 
-        st.markdown("### 💎 Upgrade Your Experience")
-        st.caption("Unlock advanced AI insights, reports, and decision tools.")
+        st.markdown(
+            """
+            <div style="margin-top:4px; margin-bottom:4px;">
+                <h4 style="margin:0; padding:0; color:#111827 !important;">
+                    💎 Upgrade Your Experience
+                </h4>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            "<div style='margin-top:0; margin-bottom:6px; color:#111827; font-size:0.82rem;'>Unlock advanced AI insights, reports, and decision tools.</div>",
+            unsafe_allow_html=True,
+        )
 
         if STRIPE_MONTHLY_LINK:
             st.link_button("💎 Premium", STRIPE_MONTHLY_LINK, use_container_width=True)
@@ -2575,7 +2558,32 @@ def main() -> None:
         if STRIPE_ONE_TIME_LINK:
             st.link_button("💳 One-Time", STRIPE_ONE_TIME_LINK, use_container_width=True)
 
-                
+        with st.expander("📘 How it works", expanded=False):
+            st.markdown(
+                """
+                <div style="color:#111827; font-size:0.84rem; line-height:1.55; font-weight:700;">
+                    1. Upload your dataset or document.<br>
+                    2. Let AI analyze the content.<br>
+                    3. Review insights, risks, forecasts, and reports.<br>
+                    4. Save, share, or upgrade features.<br>
+                    5. Upgrade to unlock advanced tools.
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        with st.expander("ℹ️ About Us", expanded=False):
+            st.markdown(
+                """
+                <div style="color:#111827; font-size:0.82rem; line-height:1.55; font-weight:700;">
+                    ExplainMyData AI helps users turn raw files into clear business insights,
+                    forecasts, data quality checks, and executive-style reports.
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+    
     uploaded_file = st.file_uploader(t("upload_title"), type=SUPPORTED_UPLOADS, help=t("upload_subtle"), key="main_uploader")
 
 
@@ -3127,26 +3135,13 @@ def main() -> None:
     st.markdown(
         """
         <div class="footer-note">
-            Clean data. Clear insights. Better decisions. Built with Streamlit, Python, AI, and business-first analytics.
+            Clean data. Clear insights. Better decisions.<br>
+            <span style="font-size:0.65rem;color:#94a3b8;">© 2026 ExplainMyData AI. All Rights Reserved.</span>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    st.markdown(
-        """
-    <div style="
-        text-align:center;
-        font-size:0.68rem;
-        color:#94a3b8;
-        margin-top:18px;
-        margin-bottom:4px;
-    ">
-        © 2026 ExplainMyData AI. All Rights Reserved.
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
-    
+
 if __name__ == "__main__":
     main()
