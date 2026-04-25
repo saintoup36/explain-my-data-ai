@@ -1,1252 +1,1623 @@
-import io
 import os
+import io
+import json
+import uuid
+import html
+import zipfile
+import locale
+import shutil
+import hashlib
+import base64
+from pathlib import Path
+from datetime import datetime
+from typing import List, Optional, Tuple
 
-import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 import streamlit as st
 from dotenv import load_dotenv
-from openai import OpenAI
+from PIL import Image, ImageOps, ImageFilter
 from reportlab.lib.pagesizes import letter
-from reportlab.pdfgen import canvas
-from docx import Document
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet
+from sklearn.linear_model import LinearRegression
+
+try:
+    from docx import Document
+except Exception:
+    Document = None
+
+try:
+    import fitz  # PyMuPDF
+except Exception:
+    fitz = None
+
+try:
+    import pytesseract
+except Exception:
+    pytesseract = None
+
+try:
+    from openai import OpenAI
+except Exception:
+    OpenAI = None
+
 
 # =========================================================
-# PAGE CONFIG
+# CONFIG
 # =========================================================
 st.set_page_config(
     page_title="ExplainMyData AI",
-    page_icon="edai_logo.png",
-    layout="wide"
+    page_icon="📊",
+    layout="wide",
+    initial_sidebar_state="expanded",
 )
 
+BASE_DIR = Path(__file__).resolve().parent
+load_dotenv(BASE_DIR / ".env", override=True)
+
+APP_NAME = "ExplainMyData AI"
+TAGLINE = "Your data, clearly explained"
+DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-5")
+SUPPORT_EMAIL = os.getenv("SUPPORT_EMAIL", "support@explainmydata.ai")
+APP_BASE_URL = os.getenv("APP_BASE_URL", "").strip()
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
+SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "").strip()
+STRIPE_ONE_TIME_LINK = os.getenv(
+    "STRIPE_ONE_TIME_LINK",
+    "https://buy.stripe.com/fZucN7gO33mU8MegZIabK00",
+).strip()
+STRIPE_MONTHLY_LINK = os.getenv(
+    "STRIPE_MONTHLY_LINK",
+    "https://buy.stripe.com/6oU14papF4qY5A29xgabK02",
+).strip()
+STRIPE_SUCCESS_URL = os.getenv("STRIPE_SUCCESS_URL", "").strip()
+PREMIUM_USERS = {
+    email.strip().lower()
+    for email in os.getenv("PREMIUM_USERS", "").split(",")
+    if email.strip()
+}
+TESSERACT_PATH = os.getenv(
+    "TESSERACT_PATH",
+    r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+)
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+LOGO_PATH = BASE_DIR / "edai_logo.png"
+FREE_ANALYSIS_LIMIT = 2
+MAX_UPLOAD_MB = 200
+SUPPORTED_UPLOADS = [
+    "csv",
+    "xlsx",
+    "xls",
+    "txt",
+    "docx",
+    "pdf",
+    "png",
+    "jpg",
+    "jpeg",
+    "webp",
+    "zip",
+]
+
+if not OPENAI_API_KEY:
+    try:
+        OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", "")
+    except Exception:
+        OPENAI_API_KEY = ""
+
+if pytesseract is not None and os.path.exists(TESSERACT_PATH):
+    pytesseract.pytesseract.tesseract_cmd = TESSERACT_PATH
+
+client = OpenAI(api_key=OPENAI_API_KEY) if OpenAI and OPENAI_API_KEY else None
+
+STORAGE_ROOT = BASE_DIR / "app_storage"
+USER_UPLOADS_DIR = STORAGE_ROOT / "user_uploads"
+USER_REPORTS_DIR = STORAGE_ROOT / "user_reports"
+SHARED_REPORTS_DIR = STORAGE_ROOT / "shared_reports"
+SUPPORT_DIR = STORAGE_ROOT / "support"
+
+for folder in [
+    STORAGE_ROOT,
+    USER_UPLOADS_DIR,
+    USER_REPORTS_DIR,
+    SHARED_REPORTS_DIR,
+    SUPPORT_DIR,
+]:
+    folder.mkdir(parents=True, exist_ok=True)
+
+
 # =========================================================
-# UI TRANSLATIONS
+# STATE
 # =========================================================
+def init_state() -> None:
+    defaults = {
+        "authenticated": False,
+        "auth_user": None,
+        "auth_mode": "local-demo",
+        "stripe_last_payment": "",
+        "usage_count": 0,
+        "gdpr_consent": False,
+        "app_language": "English",
+        "result": "",
+        "translated_result": "",
+        "doctor_result": "",
+        "chat_answer": "",
+        "ocr_text": "",
+        "ocr_preview": None,
+        "support_answer": "",
+        "last_saved_report_hash": "",
+        "use_sample_data": False,
+        "developer_premium_override": False,
+        "premium_status": "inactive",
+        "user_plan": "free",
+        "forecast_df": None,
+        "cleaned_df": None,
+        "loaded_filename": "",
+        "raw_text": "",
+        "data_mode": "structured",
+    }
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
+
+
+# =========================================================
+# LABELS
+# =========================================================
+LANGUAGES = {
+    "English": "en",
+    "French": "fr",
+    "Spanish": "es",
+    "Haitian Creole": "ht",
+    "Portuguese": "pt",
+    "Arabic": "ar",
+    "German": "de",
+    "Mandarin Chinese": "zh",
+    "Hindi": "hi",
+    "Bengali": "bn",
+    "Indonesian": "id",
+    "Urdu": "ur",
+}
+
 TRANSLATIONS = {
+    "en": {
+        "upload_title": "Upload your file or document",
+        "dashboard": "Dashboard",
+        "data_doctor": "Data Doctor",
+        "email": "Email",
+        "email_placeholder": "Type your email",
+        "password": "Password",
+        "password_placeholder": "Type your password",
+        "ask_data": "Ask Your Data",
+        "report": "Consulting Report",
+        "forecast": "Forecast",
+        "saved": "Saved",
+        "account": "Account",
+        "ocr": "OCR",
+        "decision_engine": "Decision Engine",
+        "scenario_simulator": "Scenario Simulator",
+        "dashboard_gallery": "Dashboard Gallery",
+        "shareable_report": "Shareable Report",
+        "boardroom_pdf": "Boardroom PDF",
+        "industry_template": "Industry Template",
+        "generate_dashboard": "Generate Executive Dashboard",
+        "auto_fix_dataset": "Auto-Fix Dataset",
+        "generate_decision_report": "Generate Decision Report",
+        "create_share_link": "Create Shareable Report Link",
+        "save_dashboard": "Save Dashboard Snapshot",
+        "compare": "Compare",
+        "cleaning": "Cleaning Lab",
+        "legal": "Legal",
+        "login": "Login",
+        "create": "Create",
+        "logout": "Logout",
+    },
+
+    "fr": {
+        "upload_title": "Téléchargez votre fichier ou document",
+        "dashboard": "Tableau de bord",
+        "data_doctor": "Docteur des données",
+        "email": "Email",
+        "email_placeholder": "Entrez votre email",
+        "password": "Mot de passe",
+        "password_placeholder": "Entrez votre mot de passe",
+        "ask_data": "Posez une question",
+        "report": "Rapport",
+        "forecast": "Prévision",
+        "saved": "Enregistré",
+        "account": "Compte",
+        "ocr": "OCR",
+        "compare": "Comparer",
+        "cleaning": "Nettoyage",
+        "legal": "Légal",
+        "login": "Connexion",
+        "create": "Créer",
+        "logout": "Déconnexion",
+    },
+
+    "es": {
+        "upload_title": "Sube tu archivo o documento",
+        "dashboard": "Panel",
+        "data_doctor": "Doctor de datos",
+        "email": "Correo",
+        "email_placeholder": "Ingrese su correo",
+        "password": "Contraseña",
+        "password_placeholder": "Ingrese su contraseña",
+        "ask_data": "Pregunta a tus datos",
+        "report": "Informe",
+        "forecast": "Pronóstico",
+        "saved": "Guardado",
+        "account": "Cuenta",
+        "ocr": "OCR",
+        "compare": "Comparar",
+        "cleaning": "Limpieza",
+        "legal": "Legal",
+        "login": "Iniciar sesión",
+        "create": "Crear",
+        "logout": "Cerrar sesión",
+    },
+
+    "ht": {
+        "upload_title": "Telechaje dosye ou",
+        "dashboard": "Tablo",
+        "data_doctor": "Doktè done",
+        "email": "Imèl",
+        "email_placeholder": "Antre imèl ou",
+        "password": "Modpas",
+        "password_placeholder": "Antre modpas ou",
+        "ask_data": "Poze kestyon",
+        "report": "Rapò",
+        "forecast": "Previzyon",
+        "saved": "Sove",
+        "account": "Kont",
+        "ocr": "OCR",
+        "compare": "Konpare",
+        "cleaning": "Netwayaj",
+        "legal": "Legal",
+        "login": "Konekte",
+        "create": "Kreye",
+        "logout": "Dekonekte",
+    },
+    
+    "zh": {},
+    "hi": {},
+    "bn": {},
+    "id": {},
+    "ur": {},
+}
+
+
+UI_TEXT = {
     "English": {
-        "language_selector": "App language",
-        "app_name": "ExplainMyData AI",
-        "tagline": "Turn raw files into clear business insights.",
-        "features": "What you can do:",
-        "feature_1": "- Upload CSV / Excel / TXT / Word",
-        "feature_2": "- Explore KPIs and charts",
-        "feature_3": "- Generate AI insights",
-        "feature_4": "- Ask follow-up questions",
-        "feature_5": "- Export reports",
-        "ai_ready": "AI Ready Check",
-        "ai_ready_ok": "The AI assistant is ready. You can upload a file, analyze it, ask questions, and export results.",
-        "ai_ready_fail": "AI service is not responding right now. You can still upload a file and try again in a moment.",
-        "header_title": "ExplainMyData AI",
-        "header_motto": "Your data, clearly explained.",
-        "badge_1": "AI-powered",
-        "badge_2": "Fast insights",
-        "badge_3": "Global access",
-        "badge_4": "PDF export",
-        "badge_5": "Text & Word support",
-        "upload_label": "Upload your file",
-        "supported_formats": "⚡ Supported formats: CSV, XLSX, XLS, TXT, DOCX",
-        "data_overview": "📊 Data Overview",
+        "app_language": "Choose app language",
+        "sign_in": "Sign in",
+        "email": "Email",
+        "email_placeholder": "Type your email",
+        "password": "Password",
+        "password_placeholder": "Type your password",
+        "login": "Login",
+        "create": "Create",
+        "logout": "Log out",
+        "use_sample_dataset": "Use Sample Dataset",
+        "upload_title": "Upload your file or document",
+        "upload_subtle": "CSV, Excel, TXT, DOCX, PDF, PNG, JPG, JPEG, WEBP, ZIP • Max size: 200MB",
         "rows": "Rows",
         "columns": "Columns",
         "missing": "Missing",
         "duplicates": "Duplicates",
-        "overview_tab": "Overview",
-        "insight_tab": "Insight Board",
-        "charts_tab": "Charts",
-        "ai_tab": "AI Insights",
-        "translate_tab": "Translate",
-        "export_tab": "Ask & Export",
-        "upload_begin": "Upload a file to begin.",
-        "how_it_works": "How it works",
-        "step_1": "1. Upload a CSV, Excel, TXT, or DOCX file.",
-        "step_2": "2. Review your overview, charts, and insight board.",
-        "step_3": "3. Generate AI insights in your selected language.",
-        "step_4": "4. Ask follow-up questions to explore patterns, risks, and opportunities.",
-        "step_5": "5. Download reports and share findings with teammates or clients.",
-        "workspace_loaded": "Analysis workspace loaded successfully.",
-        "text_mode_warning": "This file was converted into a text-based table for analysis. Charts may be limited depending on the extracted content.",
-        "snapshot": "🔍 Dataset Snapshot",
-        "text_preview": "Extracted Text Preview",
-        "preview": "Preview",
-        "column_summary": "Column Summary",
-        "data_quality_notes": "Data Quality Notes",
-        "cleaning_assistant": "🧹 Data Cleaning Assistant",
-        "show_cleaning": "Show Cleaning Suggestions",
-        "missing_cols": "Columns with missing values:",
-        "no_missing": "No missing values found.",
-        "dup_review": "duplicate rows to review.",
-        "no_dup": "No duplicate rows found.",
-        "insight_board_title": "📌 Insight Board",
-        "numeric_spotlight": "Numeric Feature Spotlight",
-        "category_spotlight": "Category Feature Spotlight",
-        "choose_numeric": "Choose a numeric column",
-        "choose_categorical": "Choose a categorical column",
-        "no_numeric": "No numeric columns available.",
-        "no_categorical": "No categorical columns available.",
-        "quality_snapshot": "Data Quality Snapshot",
-        "contains_missing": "This dataset contains missing values.",
-        "no_missing_detected": "No missing values detected.",
-        "contains_dup": "This dataset contains duplicate rows.",
-        "no_dup_detected": "No duplicate rows detected.",
-        "correlation_map": "Correlation Map",
-        "need_two_numeric": "Need at least two numeric columns for a correlation map.",
-        "quick_text_insights": "Quick Text Insights",
-        "charts_title": "📈 Interactive Dashboard / Charts",
-        "chart_type": "Choose chart type",
-        "histogram": "Histogram",
-        "box_plot": "Box Plot",
-        "bar_chart": "Bar Chart",
-        "line_chart": "Line Chart",
-        "choose_numeric_chart": "Choose numeric column",
-        "choose_cat_filter": "Choose categorical filter",
-        "none": "None",
-        "select_value": "Select value from",
-        "select_cat_for_bar": "Select a categorical column to use the Bar Chart.",
-        "choose_date": "Choose date/year column",
-        "no_date": "No date/year column found for line chart.",
-        "ai_insights_title": "🧠 Smart AI Insights",
-        "analysis_focus": "Choose analysis focus",
-        "focus_general": "General Analysis",
-        "focus_sales": "Sales Analysis",
-        "focus_marketing": "Marketing Analysis",
-        "focus_customer": "Customer Analysis",
-        "focus_operations": "Operations Analysis",
-        "focus_financial": "Financial Analysis",
-        "focus_document": "Document Summary Analysis",
-        "free_used": "Free analyses used",
-        "free_limit": "Free limit reached. Upgrade to continue.",
-        "analyze_data": "Analyze Data",
-        "generating": "Generating insights...",
-        "analysis_results": "Analysis Results",
-        "how_read_analysis": "🧭 How to Read This Analysis",
-        "download_insights": "📥 Download Insights (.txt)",
-        "translate_title": "🌍 Translate Results",
-        "translation_language": "Choose translation language",
-        "generate_first": "Generate AI insights first, then translate them here.",
-        "translate_insights": "Translate Insights",
-        "no_translate_yet": "No insights to translate yet.",
-        "translating": "Translating to",
-        "translated_results": "Translated Results",
-        "download_translation": "📥 Download Translation",
-        "ask_export_title": "💬 Ask & Export",
-        "ask_export_text": "Ask follow-up questions in plain language, then export your results.",
-        "question_placeholder": "Example: Which trend matters most in this dataset or document?",
-        "thinking": "Thinking...",
-        "answer": "Answer",
-        "export_results": "📥 Export Results",
-        "download_csv": "📥 Download Processed Data as CSV",
-        "download_pdf": "📄 Download PDF Report",
-        "download_translated": "🌍 Download Translated Results",
-        "premium_title": "💎 Upgrade to Premium",
-        "premium_text": "Unlock unlimited analysis, deeper insights, advanced exports, translations, and premium reports.",
-        "premium_button": "💎 Upgrade to Premium",
-        "next_steps": "Suggested Next Steps",
-        "next_1": "- Review missing values and duplicates.",
-        "next_2": "- Explore important columns.",
-        "next_3": "- Generate AI insights based on your business goal.",
-        "next_4": "- Ask follow-up questions for deeper understanding.",
-        "next_5": "- Download and share your report.",
+        "generate_ai_insights": "Generate AI Insights",
+        "run_ai_data_doctor": "Run AI Data Doctor",
+        "download_executive_report": "Download Executive Report",
+        "analysis_focus": "Analysis focus",
     },
-    "French": {
-        "language_selector": "Langue de l’application",
-        "app_name": "ExplainMyData AI",
-        "tagline": "Transformez des fichiers bruts en informations claires.",
-        "features": "Ce que vous pouvez faire :",
-        "feature_1": "- Téléverser CSV / Excel / TXT / Word",
-        "feature_2": "- Explorer KPI et graphiques",
-        "feature_3": "- Générer des analyses IA",
-        "feature_4": "- Poser des questions de suivi",
-        "feature_5": "- Exporter des rapports",
-        "ai_ready": "Vérifier l’IA",
-        "ai_ready_ok": "L’assistant IA est prêt. Vous pouvez téléverser un fichier, l’analyser, poser des questions et exporter les résultats.",
-        "ai_ready_fail": "Le service IA ne répond pas pour le moment. Vous pouvez quand même téléverser un fichier et réessayer dans un instant.",
-        "header_title": "ExplainMyData AI",
-        "header_motto": "Vos données, clairement expliquées.",
-        "badge_1": "Propulsé par l’IA",
-        "badge_2": "Analyses rapides",
-        "badge_3": "Accès mondial",
-        "badge_4": "Export PDF",
-        "badge_5": "Support texte et Word",
-        "upload_label": "Téléversez votre fichier",
-        "supported_formats": "⚡ Formats pris en charge : CSV, XLSX, XLS, TXT, DOCX",
-        "data_overview": "📊 Vue d’ensemble des données",
-        "rows": "Lignes",
-        "columns": "Colonnes",
-        "missing": "Manquants",
-        "duplicates": "Doublons",
-        "overview_tab": "Aperçu",
-        "insight_tab": "Tableau d’insights",
-        "charts_tab": "Graphiques",
-        "ai_tab": "Analyses IA",
-        "translate_tab": "Traduire",
-        "export_tab": "Questions & Export",
-        "upload_begin": "Téléversez un fichier pour commencer.",
-        "how_it_works": "Comment ça marche",
-        "step_1": "1. Téléversez un fichier CSV, Excel, TXT ou DOCX.",
-        "step_2": "2. Consultez l’aperçu, les graphiques et le tableau d’insights.",
-        "step_3": "3. Générez des analyses IA dans la langue sélectionnée.",
-        "step_4": "4. Posez des questions de suivi pour explorer les tendances, risques et opportunités.",
-        "step_5": "5. Téléchargez des rapports et partagez vos conclusions avec collègues ou clients.",
-        "workspace_loaded": "Espace d’analyse chargé avec succès.",
-        "text_mode_warning": "Ce fichier a été converti en tableau textuel pour l’analyse. Les graphiques peuvent être limités selon le contenu extrait.",
-        "snapshot": "🔍 Aperçu du jeu de données",
-        "text_preview": "Aperçu du texte extrait",
-        "preview": "Aperçu",
-        "column_summary": "Résumé des colonnes",
-        "data_quality_notes": "Notes sur la qualité des données",
-        "cleaning_assistant": "🧹 Assistant de nettoyage des données",
-        "show_cleaning": "Afficher les suggestions de nettoyage",
-        "missing_cols": "Colonnes avec des valeurs manquantes :",
-        "no_missing": "Aucune valeur manquante trouvée.",
-        "dup_review": "lignes en double à examiner.",
-        "no_dup": "Aucune ligne en double trouvée.",
-        "insight_board_title": "📌 Tableau d’insights",
-        "numeric_spotlight": "Mise en avant numérique",
-        "category_spotlight": "Mise en avant catégorielle",
-        "choose_numeric": "Choisissez une colonne numérique",
-        "choose_categorical": "Choisissez une colonne catégorielle",
-        "no_numeric": "Aucune colonne numérique disponible.",
-        "no_categorical": "Aucune colonne catégorielle disponible.",
-        "quality_snapshot": "Instantané de qualité des données",
-        "contains_missing": "Ce jeu de données contient des valeurs manquantes.",
-        "no_missing_detected": "Aucune valeur manquante détectée.",
-        "contains_dup": "Ce jeu de données contient des lignes en double.",
-        "no_dup_detected": "Aucune ligne en double détectée.",
-        "correlation_map": "Carte de corrélation",
-        "need_two_numeric": "Au moins deux colonnes numériques sont nécessaires pour une carte de corrélation.",
-        "quick_text_insights": "Observations rapides",
-        "charts_title": "📈 Tableau de bord / Graphiques",
-        "chart_type": "Choisissez le type de graphique",
-        "histogram": "Histogramme",
-        "box_plot": "Boîte à moustaches",
-        "bar_chart": "Graphique en barres",
-        "line_chart": "Graphique en ligne",
-        "choose_numeric_chart": "Choisissez une colonne numérique",
-        "choose_cat_filter": "Choisissez un filtre catégoriel",
-        "none": "Aucun",
-        "select_value": "Sélectionnez une valeur de",
-        "select_cat_for_bar": "Sélectionnez une colonne catégorielle pour utiliser le graphique en barres.",
-        "choose_date": "Choisissez une colonne date/année",
-        "no_date": "Aucune colonne date/année trouvée pour le graphique en ligne.",
-        "ai_insights_title": "🧠 Analyses IA intelligentes",
-        "analysis_focus": "Choisissez le type d’analyse",
-        "focus_general": "Analyse générale",
-        "focus_sales": "Analyse des ventes",
-        "focus_marketing": "Analyse marketing",
-        "focus_customer": "Analyse client",
-        "focus_operations": "Analyse opérationnelle",
-        "focus_financial": "Analyse financière",
-        "focus_document": "Analyse de résumé de document",
-        "free_used": "Analyses gratuites utilisées",
-        "free_limit": "Limite gratuite atteinte. Passez à la version Premium pour continuer.",
-        "analyze_data": "Analyser les données",
-        "generating": "Génération des analyses...",
-        "analysis_results": "Résultats de l’analyse",
-        "how_read_analysis": "🧭 Comment lire cette analyse",
-        "download_insights": "📥 Télécharger les analyses (.txt)",
-        "translate_title": "🌍 Traduire les résultats",
-        "translation_language": "Choisissez la langue de traduction",
-        "generate_first": "Générez d’abord des analyses IA, puis traduisez-les ici.",
-        "translate_insights": "Traduire les analyses",
-        "no_translate_yet": "Aucune analyse à traduire pour le moment.",
-        "translating": "Traduction vers",
-        "translated_results": "Résultats traduits",
-        "download_translation": "📥 Télécharger la traduction",
-        "ask_export_title": "💬 Questions & Export",
-        "ask_export_text": "Posez des questions de suivi en langage naturel, puis exportez vos résultats.",
-        "question_placeholder": "Exemple : quelle tendance est la plus importante dans ce jeu de données ou document ?",
-        "thinking": "Réflexion...",
-        "answer": "Réponse",
-        "export_results": "📥 Exporter les résultats",
-        "download_csv": "📥 Télécharger les données traitées en CSV",
-        "download_pdf": "📄 Télécharger le rapport PDF",
-        "download_translated": "🌍 Télécharger les résultats traduits",
-        "premium_title": "💎 Passer à Premium",
-        "premium_text": "Débloquez des analyses illimitées, des insights plus profonds, des exports avancés, des traductions et des rapports premium.",
-        "premium_button": "💎 Passer à Premium",
-        "next_steps": "Étapes recommandées",
-        "next_1": "- Vérifiez les valeurs manquantes et les doublons.",
-        "next_2": "- Explorez les colonnes importantes.",
-        "next_3": "- Générez des analyses IA selon votre objectif métier.",
-        "next_4": "- Posez des questions de suivi pour approfondir la compréhension.",
-        "next_5": "- Téléchargez et partagez votre rapport.",
+    "Haitian Creole": {
+        "app_language": "Chwazi lang aplikasyon an",
+        "sign_in": "Konekte",
+        "email": "Imèl",
+        "email_placeholder": "Ekri imèl ou",
+        "password": "Modpas",
+        "password_placeholder": "Ekri modpas ou",
+        "login": "Antre",
+        "create": "Kreye",
+        "logout": "Dekonekte",
+        "use_sample_dataset": "Sèvi ak done egzanp",
+        "upload_title": "Telechaje fichye oswa dokiman ou",
+        "upload_subtle": "CSV, Excel, TXT, DOCX, PDF, PNG, JPG, JPEG, WEBP, ZIP • Gwosè maksimòm: 200MB",
+        "rows": "Ranje",
+        "columns": "Kolòn",
+        "missing": "Ki manke",
+        "duplicates": "Diplikasyon",
+        "generate_ai_insights": "Jenere Enfòmasyon AI",
+        "run_ai_data_doctor": "Lanse AI Data Doctor",
+        "download_executive_report": "Telechaje Rapò Egzekitif",
+        "analysis_focus": "Fokus analiz la",
     },
-    "Spanish": {
-        "language_selector": "Idioma de la aplicación",
-        "app_name": "ExplainMyData AI",
-        "tagline": "Convierte archivos sin procesar en ideas claras de negocio.",
-        "features": "Lo que puedes hacer:",
-        "feature_1": "- Subir CSV / Excel / TXT / Word",
-        "feature_2": "- Explorar KPI y gráficos",
-        "feature_3": "- Generar análisis con IA",
-        "feature_4": "- Hacer preguntas de seguimiento",
-        "feature_5": "- Exportar informes",
-        "ai_ready": "Verificar IA",
-        "ai_ready_ok": "El asistente de IA está listo. Puedes subir un archivo, analizarlo, hacer preguntas y exportar resultados.",
-        "ai_ready_fail": "El servicio de IA no responde en este momento. Aún puedes subir un archivo e intentarlo de nuevo en un momento.",
-        "header_title": "ExplainMyData AI",
-        "header_motto": "Tus datos, claramente explicados.",
-        "badge_1": "Impulsado por IA",
-        "badge_2": "Ideas rápidas",
-        "badge_3": "Acceso global",
-        "badge_4": "Exportación PDF",
-        "badge_5": "Soporte de texto y Word",
-        "upload_label": "Sube tu archivo",
-        "supported_formats": "⚡ Formatos compatibles: CSV, XLSX, XLS, TXT, DOCX",
-        "data_overview": "📊 Resumen de datos",
-        "rows": "Filas",
-        "columns": "Columnas",
-        "missing": "Faltantes",
-        "duplicates": "Duplicados",
-        "overview_tab": "Resumen",
-        "insight_tab": "Panel de insights",
-        "charts_tab": "Gráficos",
-        "ai_tab": "Insights IA",
-        "translate_tab": "Traducir",
-        "export_tab": "Preguntar y exportar",
-        "upload_begin": "Sube un archivo para comenzar.",
-        "how_it_works": "Cómo funciona",
-        "step_1": "1. Sube un archivo CSV, Excel, TXT o DOCX.",
-        "step_2": "2. Revisa la vista general, los gráficos y el panel de insights.",
-        "step_3": "3. Genera análisis con IA en tu idioma seleccionado.",
-        "step_4": "4. Haz preguntas de seguimiento para explorar patrones, riesgos y oportunidades.",
-        "step_5": "5. Descarga informes y comparte hallazgos con colegas o clientes.",
-        "workspace_loaded": "Espacio de análisis cargado correctamente.",
-        "text_mode_warning": "Este archivo se convirtió en una tabla basada en texto para el análisis. Los gráficos pueden ser limitados según el contenido extraído.",
-        "snapshot": "🔍 Vista previa del conjunto de datos",
-        "text_preview": "Vista previa del texto extraído",
-        "preview": "Vista previa",
-        "column_summary": "Resumen de columnas",
-        "data_quality_notes": "Notas sobre la calidad de los datos",
-        "cleaning_assistant": "🧹 Asistente de limpieza de datos",
-        "show_cleaning": "Mostrar sugerencias de limpieza",
-        "missing_cols": "Columnas con valores faltantes:",
-        "no_missing": "No se encontraron valores faltantes.",
-        "dup_review": "filas duplicadas para revisar.",
-        "no_dup": "No se encontraron filas duplicadas.",
-        "insight_board_title": "📌 Panel de insights",
-        "numeric_spotlight": "Enfoque numérico",
-        "category_spotlight": "Enfoque categórico",
-        "choose_numeric": "Elige una columna numérica",
-        "choose_categorical": "Elige una columna categórica",
-        "no_numeric": "No hay columnas numéricas disponibles.",
-        "no_categorical": "No hay columnas categóricas disponibles.",
-        "quality_snapshot": "Resumen de calidad de datos",
-        "contains_missing": "Este conjunto de datos contiene valores faltantes.",
-        "no_missing_detected": "No se detectaron valores faltantes.",
-        "contains_dup": "Este conjunto de datos contiene filas duplicadas.",
-        "no_dup_detected": "No se detectaron filas duplicadas.",
-        "correlation_map": "Mapa de correlación",
-        "need_two_numeric": "Se necesitan al menos dos columnas numéricas para un mapa de correlación.",
-        "quick_text_insights": "Insights rápidos",
-        "charts_title": "📈 Panel interactivo / Gráficos",
-        "chart_type": "Elige el tipo de gráfico",
-        "histogram": "Histograma",
-        "box_plot": "Diagrama de caja",
-        "bar_chart": "Gráfico de barras",
-        "line_chart": "Gráfico de líneas",
-        "choose_numeric_chart": "Elige una columna numérica",
-        "choose_cat_filter": "Elige un filtro categórico",
-        "none": "Ninguno",
-        "select_value": "Selecciona un valor de",
-        "select_cat_for_bar": "Selecciona una columna categórica para usar el gráfico de barras.",
-        "choose_date": "Elige una columna de fecha/año",
-        "no_date": "No se encontró una columna de fecha/año para el gráfico de líneas.",
-        "ai_insights_title": "🧠 Insights inteligentes de IA",
-        "analysis_focus": "Elige el enfoque del análisis",
-        "focus_general": "Análisis general",
-        "focus_sales": "Análisis de ventas",
-        "focus_marketing": "Análisis de marketing",
-        "focus_customer": "Análisis de clientes",
-        "focus_operations": "Análisis de operaciones",
-        "focus_financial": "Análisis financiero",
-        "focus_document": "Análisis de resumen de documento",
-        "free_used": "Análisis gratuitos usados",
-        "free_limit": "Se alcanzó el límite gratuito. Actualiza a Premium para continuar.",
-        "analyze_data": "Analizar datos",
-        "generating": "Generando insights...",
-        "analysis_results": "Resultados del análisis",
-        "how_read_analysis": "🧭 Cómo leer este análisis",
-        "download_insights": "📥 Descargar insights (.txt)",
-        "translate_title": "🌍 Traducir resultados",
-        "translation_language": "Elige el idioma de traducción",
-        "generate_first": "Primero genera insights con IA y luego tradúcelos aquí.",
-        "translate_insights": "Traducir insights",
-        "no_translate_yet": "Todavía no hay insights para traducir.",
-        "translating": "Traduciendo a",
-        "translated_results": "Resultados traducidos",
-        "download_translation": "📥 Descargar traducción",
-        "ask_export_title": "💬 Preguntar y exportar",
-        "ask_export_text": "Haz preguntas de seguimiento en lenguaje natural y luego exporta tus resultados.",
-        "question_placeholder": "Ejemplo: ¿qué tendencia importa más en este conjunto de datos o documento?",
-        "thinking": "Pensando...",
-        "answer": "Respuesta",
-        "export_results": "📥 Exportar resultados",
-        "download_csv": "📥 Descargar datos procesados como CSV",
-        "download_pdf": "📄 Descargar informe PDF",
-        "download_translated": "🌍 Descargar resultados traducidos",
-        "premium_title": "💎 Actualizar a Premium",
-        "premium_text": "Desbloquea análisis ilimitados, insights más profundos, exportaciones avanzadas, traducciones y reportes premium.",
-        "premium_button": "💎 Actualizar a Premium",
-        "next_steps": "Siguientes pasos sugeridos",
-        "next_1": "- Revisa valores faltantes y duplicados.",
-        "next_2": "- Explora columnas importantes.",
-        "next_3": "- Genera insights con IA según tu objetivo de negocio.",
-        "next_4": "- Haz preguntas de seguimiento para una comprensión más profunda.",
-        "next_5": "- Descarga y comparte tu informe.",
-    }
 }
-
-# =========================================================
-# CSS / STYLING
-# =========================================================
-st.markdown("""
-<style>
-html, body, [class*="css"] {
-    font-family: Arial, sans-serif;
-}
-
-.stApp {
-    background:
-        radial-gradient(circle at top left, rgba(29, 78, 137, 0.18) 0%, rgba(29, 78, 137, 0.00) 28%),
-        radial-gradient(circle at bottom right, rgba(34, 197, 94, 0.10) 0%, rgba(34, 197, 94, 0.00) 30%),
-        linear-gradient(135deg, #081018 0%, #0c1622 45%, #111827 100%);
-    background-attachment: fixed;
-}
-
-.block-container {
-    padding-top: 0.7rem !important;
-    padding-bottom: 0.15rem !important;
-    max-width: 96% !important;
-}
-
-main {
-    padding-bottom: 0 !important;
-    margin-bottom: 0 !important;
-}
-
-footer {
-    visibility: hidden;
-    height: 0 !important;
-}
-
-section[data-testid="stSidebar"] {
-    background: #f3f4f6 !important;
-    width: 210px !important;
-    min-width: 210px !important;
-    border-right: 1px solid rgba(15, 23, 42, 0.08);
-}
-
-section[data-testid="stSidebar"] .block-container {
-    padding-top: 0.9rem !important;
-    padding-bottom: 0.8rem !important;
-    padding-left: 0.9rem !important;
-    padding-right: 0.9rem !important;
-}
-
-section[data-testid="stSidebar"] * {
-    color: #163a6b !important;
-}
-
-section[data-testid="stSidebar"] .stButton > button {
-    background: linear-gradient(135deg, #67e8f9 0%, #22d3ee 100%) !important;
-    color: #000000 !important;
-    font-weight: 800 !important;
-    border: 1px solid #06b6d4 !important;
-    border-radius: 10px !important;
-}
-
-section[data-testid="stSidebar"] .stButton > button:hover {
-    background: linear-gradient(135deg, #a5f3fc 0%, #67e8f9 100%) !important;
-    color: #000000 !important;
-}
-
-.hero-wrap {
-    background: linear-gradient(135deg, #9fdfb4 0%, #82d39d 50%, #63c48a 100%);
-    border-radius: 18px;
-    padding: 24px 24px;
-    margin-top: 26px !important;
-    margin-bottom: 12px !important;
-    box-shadow: 0 6px 18px rgba(0,0,0,0.18);
-    border: 1px solid rgba(255,255,255,0.18);
-    position: relative;
-    overflow: hidden;
-}
-
-.hero-wrap::before {
-    content: "";
-    position: absolute;
-    top: -16px;
-    right: 20px;
-    width: 120px;
-    height: 120px;
-    background: radial-gradient(circle, rgba(255,255,255,0.18) 0%, rgba(255,255,255,0.00) 72%);
-    pointer-events: none;
-}
-
-.hero-wrap::after {
-    content: "";
-    display: block;
-    margin-top: 14px;
-    border-bottom: 1px solid rgba(20, 83, 45, 0.18);
-}
-
-.hero-title {
-    font-size: 2.2rem;
-    font-weight: 800;
-    color: #14532d !important;
-    margin-bottom: 6px;
-}
-
-.hero-motto {
-    font-size: 1.08rem;
-    color: #f8fffb !important;
-    font-weight: 700;
-    margin-bottom: 14px;
-}
-
-.hero-badge {
-    display: inline-block;
-    background: rgba(255,255,255,0.78);
-    color: #14532d;
-    padding: 7px 12px;
-    margin: 4px 6px 0 0;
-    border-radius: 999px;
-    font-size: 0.88rem;
-    font-weight: 600;
-}
-
-.section-wrap {
-    background: linear-gradient(
-        135deg,
-        rgba(230, 255, 242, 0.94) 0%,
-        rgba(217, 251, 232, 0.92) 45%,
-        rgba(199, 249, 212, 0.90) 100%
-    );
-    backdrop-filter: blur(6px);
-    -webkit-backdrop-filter: blur(6px);
-    border-radius: 22px;
-    padding: 20px;
-    margin-top: 8px;
-    margin-bottom: 8px;
-    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
-    border: 2px solid rgba(20, 83, 45, 0.18);
-    position: relative;
-    overflow: hidden;
-}
-
-.section-wrap::before {
-    content: "";
-    position: absolute;
-    top: -30px;
-    right: -30px;
-    width: 140px;
-    height: 140px;
-    background: radial-gradient(circle, rgba(255,255,255,0.22) 0%, rgba(255,255,255,0.00) 72%);
-    pointer-events: none;
-}
-
-.section-wrap::after {
-    content: "";
-    position: absolute;
-    bottom: -35px;
-    left: -35px;
-    width: 160px;
-    height: 160px;
-    background: radial-gradient(circle, rgba(34,197,94,0.08) 0%, rgba(34,197,94,0.00) 72%);
-    pointer-events: none;
-}
-
-.section-title {
-    color: #14532d !important;
-    font-size: 1.4rem;
-    font-weight: 800;
-    margin-bottom: 8px;
-}
-
-.section-subtle {
-    color: #166534 !important;
-    font-size: 0.98rem;
-    margin-bottom: 14px;
-}
-
-button[data-baseweb="tab"] {
-    border: 1px solid rgba(255,255,255,0.16) !important;
-    border-radius: 12px 12px 0 0 !important;
-    margin-right: 6px !important;
-    background: rgba(255,255,255,0.03) !important;
-}
-
-button[data-baseweb="tab"] * {
-    color: #f3f4f6 !important;
-    font-weight: 600 !important;
-}
-
-button[data-baseweb="tab"][aria-selected="true"] {
-    border: 1px solid rgba(116, 198, 157, 0.55) !important;
-    background: rgba(116, 198, 157, 0.10) !important;
-}
-
-/* =========================
-   FINAL UPLOADER STYLING
-========================= */
-.custom-upload-card {
-    background: #d8d2c8 !important;
-    border: 1.5px solid rgba(90, 82, 72, 0.25);
-    border-radius: 16px;
-    padding: 16px 18px !important;
-    margin-bottom: 6px;
-    box-shadow: 0 4px 10px rgba(0,0,0,0.08);
-}
-
-.custom-upload-title {
-    color: #2f855a !important;
-    font-size: 1.3rem !important;   /* 🔥 bigger */
-    font-weight: 800 !important;
-    margin-bottom: 6px !important;
-}
-
-.custom-upload-drop {
-    color: #8b5e3c !important;
-    font-size: 1.1rem !important;   /* 🔥 bigger */
-    font-weight: 700 !important;
-    margin-bottom: 6px !important;
-}
-
-i.custom-upload-limit {
-    background: linear-gradient(135deg, #c2410c 0%, #ea580c 50%, #f97316 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    font-size: 1rem !important;
-    font-weight: 800 !important;
-}
-
-[data-testid="stFileUploader"] {
-    background: linear-gradient(135deg, #d8d2c8 0%, #cfc8bd 55%, #c4bdb2 100%) !important;
-    border: 1.5px solid rgba(90, 82, 72, 0.22) !important;
-    border-top: none !important;
-    border-radius: 0 0 16px 16px !important;
-    padding: 2px 10px 4px 10px !important;
-    margin-top: 0 !important;
-    box-shadow:
-        0 4px 10px rgba(0,0,0,0.08),
-        inset 0 0 0 2px rgba(120, 108, 96, 0.22) !important;
-}
-
-/* hide native uploader title and prompt text */
-[data-testid="stFileUploader"] label,
-[data-testid="stFileUploader"] section small,
-[data-testid="stFileUploader"] section div div {
-    display: none !important;
-}
-
-/* Browse files button */
-[data-testid="stFileUploader"] button {
-    background: #fbbf24 !important;
-    color: #000000 !important;
-    border: 1px solid #f59e0b !important;
-    border-radius: 10px !important;
-    font-weight: 800 !important;
-    box-shadow: none !important;
-}
-
-[data-testid="stFileUploader"] button:hover {
-    background: #f59e0b !important;
-    color: #000000 !important;
-    border: 1px solid #f59e0b !important;
-}
-
-.stButton > button {
-    border-radius: 10px !important;
-    background-color: #21a366 !important;
-    color: white !important;
-    font-weight: 700 !important;
-    border: none !important;
-}
-
-.stButton > button:hover {
-    background-color: #188a54 !important;
-    color: white !important;
-}
-
-.stButton > button:focus:not(:active) {
-    background-color: #21a366 !important;
-    color: white !important;
-    border: none !important;
-    box-shadow: none !important;
-}
-
-.stDownloadButton > button {
-    border-radius: 10px !important;
-    background-color: #2563eb !important;
-    color: white !important;
-    font-weight: 700 !important;
-    border: none !important;
-}
-
-.stDownloadButton > button:hover {
-    background-color: #1d4ed8 !important;
-    color: white !important;
-}
-
-[data-testid="stDataFrame"] {
-    border-radius: 14px;
-    overflow: hidden;
-}
-</style>
-""", unsafe_allow_html=True)
-
-# =========================================================
-# SETUP
-# =========================================================
-env_path = r"C:\\Users\\Saintelus\\Documents\\explain-my-data\\.env"
-load_dotenv(dotenv_path=env_path, override=True)
-
-api_key = os.getenv("OPENAI_API_KEY")
-
-if not api_key:
-    try:
-        api_key = st.secrets["OPENAI_API_KEY"]
-    except Exception:
-        api_key = None
-
-if not api_key:
-    st.error("OPENAI_API_KEY not found in .env or Streamlit secrets.")
-    st.stop()
-
-client = OpenAI(api_key=api_key)
-
-# =========================================================
-# SESSION STATE
-# =========================================================
-if "usage_count" not in st.session_state:
-    st.session_state.usage_count = 0
-if "result" not in st.session_state:
-    st.session_state.result = ""
-if "translated_result" not in st.session_state:
-    st.session_state.translated_result = ""
-if "chat_answer" not in st.session_state:
-    st.session_state.chat_answer = ""
-if "loaded_mode" not in st.session_state:
-    st.session_state.loaded_mode = ""
-if "raw_text_content" not in st.session_state:
-    st.session_state.raw_text_content = ""
-if "app_language" not in st.session_state:
-    st.session_state.app_language = "English"
 
 # =========================================================
 # HELPERS
 # =========================================================
-def create_pdf_report(text: str) -> bytes:
-    buffer = io.BytesIO()
-    pdf = canvas.Canvas(buffer, pagesize=letter)
-    _, height = letter
+def auto_translate(text, target_language):
+    if not ai_available():
+        return text  # fallback if no API
 
-    text_object = pdf.beginText(40, height - 50)
-    text_object.setFont("Helvetica", 11)
-
-    lines = text.split("\\n")
-    for line in lines:
-        wrapped_lines = [line[i:i+95] for i in range(0, len(line), 95)] if line else [""]
-        for wrapped_line in wrapped_lines:
-            if text_object.getY() < 50:
-                pdf.drawText(text_object)
-                pdf.showPage()
-                text_object = pdf.beginText(40, height - 50)
-                text_object.setFont("Helvetica", 11)
-            text_object.textLine(wrapped_line)
-
-    pdf.drawText(text_object)
-    pdf.save()
-    buffer.seek(0)
-    return buffer.getvalue()
-
-def load_structured_data(file):
-    if file.name.lower().endswith(".csv"):
-        return pd.read_csv(file)
-    if file.name.lower().endswith((".xlsx", ".xls")):
-        return pd.read_excel(file)
-    raise ValueError("Unsupported structured file format.")
-
-def load_text_file(file):
-    return file.read().decode("utf-8", errors="ignore")
-
-def load_docx_file(file):
-    doc = Document(file)
-    paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
-    return "\\n".join(paragraphs)
-
-def text_to_dataframe(text, source_name="text_document"):
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    if not lines:
-        return pd.DataFrame({"source": [source_name], "content": ["No readable text found."]})
-
-    return pd.DataFrame({
-        "source": [source_name] * len(lines),
-        "line_number": list(range(1, len(lines) + 1)),
-        "content": lines
-    })
-
-def load_any_file(file):
-    name = file.name.lower()
-
-    if name.endswith((".csv", ".xlsx", ".xls")):
-        df = load_structured_data(file)
-        return df, "table", ""
-
-    if name.endswith(".txt"):
-        raw_text = load_text_file(file)
-        df = text_to_dataframe(raw_text, source_name=file.name)
-        return df, "text", raw_text
-
-    if name.endswith(".docx"):
-        raw_text = load_docx_file(file)
-        df = text_to_dataframe(raw_text, source_name=file.name)
-        return df, "text", raw_text
-
-    raise ValueError("Unsupported file format. Please upload CSV, XLSX, XLS, TXT, or DOCX.")
-
-def build_data_summary(df, mode, raw_text):
-    if mode == "table":
-        return df.describe(include="all").fillna("").to_string()
-
-    preview_lines = raw_text.splitlines()[:80]
-    preview_text = "\\n".join(preview_lines)
-    return f"""
-Document/Text Summary
----------------------
-Rows created from text: {df.shape[0]}
-Columns: {df.shape[1]}
-Source columns: {', '.join(df.columns)}
-
-Preview of extracted text:
-{preview_text}
-"""
-
-# =========================================================
-# SIDEBAR + LANGUAGE
-# =========================================================
-with st.sidebar:
-    language = st.selectbox(
-        TRANSLATIONS["English"]["language_selector"],
-        list(TRANSLATIONS.keys()),
-        index=list(TRANSLATIONS.keys()).index(st.session_state.app_language)
-    )
-    st.session_state.app_language = language
-    T = TRANSLATIONS[language]
-
-    st.markdown(f"## {T['app_name']}")
-    st.write(T["tagline"])
-    st.markdown("---")
-    st.write(f"**{T['features']}**")
-    st.write(T["feature_1"])
-    st.write(T["feature_2"])
-    st.write(T["feature_3"])
-    st.write(T["feature_4"])
-    st.write(T["feature_5"])
-    st.markdown("---")
-
-    if st.button(T["ai_ready"], use_container_width=True):
-        try:
-            client.responses.create(
-                model="gpt-5",
-                input=f"Respond in {language}. Confirm in 2 short sentences that the AI assistant is ready and the user can upload, analyze, ask questions, and export results."
-            )
-            st.success(T["ai_ready_ok"])
-        except Exception:
-            st.warning(T["ai_ready_fail"])
-
-    st.markdown("---")
-    st.caption("Built with Streamlit, Python, Pandas, Matplotlib, ReportLab, python-docx, and OpenAI.")
-
-T = TRANSLATIONS[st.session_state.app_language]
-language = st.session_state.app_language
-
-# =========================================================
-# HEADER
-# =========================================================
-st.markdown('<div class="hero-wrap">', unsafe_allow_html=True)
-
-logo_col, text_col = st.columns([1, 4])
-
-with logo_col:
-    if os.path.exists("edai_logo.png"):
-        st.image("edai_logo.png", width=180)
-
-with text_col:
-    st.markdown(f'<div class="hero-title">{T["header_title"]}</div>', unsafe_allow_html=True)
-    st.markdown(f'<div class="hero-motto">{T["header_motto"]}</div>', unsafe_allow_html=True)
-    st.markdown(f"""
-    <div>
-        <span class="hero-badge">{T["badge_1"]}</span>
-        <span class="hero-badge">{T["badge_2"]}</span>
-        <span class="hero-badge">{T["badge_3"]}</span>
-        <span class="hero-badge">{T["badge_4"]}</span>
-        <span class="hero-badge">{T["badge_5"]}</span>
-    </div>
-    """, unsafe_allow_html=True)
-
-st.markdown('</div>', unsafe_allow_html=True)
-
-# =========================================================
-# CUSTOM UPLOADER TEXT + REAL UPLOADER
-# =========================================================
-st.markdown(
-    """
-    <div class="custom-upload-card">
-        <div class="custom-upload-title">Upload your data or document</div>
-        <div class="custom-upload-drop">Start by selecting a file below to generate insights</div>
-        <div class="custom-upload-limit">
-            Supported formats: CSV, Excel, TXT, DOCX • Max size: 200MB
-        </div>
-    </div>
-    """,
-    unsafe_allow_html=True
-)
-
-uploaded_file = st.file_uploader(
-    "File uploader",
-    type=["csv", "xlsx", "xls", "txt", "docx"],
-    label_visibility="collapsed"
-)
-
-st.markdown(
-    f"""
-    <div style="
-        background: linear-gradient(135deg, #0b1f3a 0%, #12345a 50%, #1d4e89 100%);
-        border-radius: 12px;
-        padding: 10px 14px;
-        border: 1px solid rgba(255,255,255,0.08);
-        color: #f5f9ff;
-        font-weight: 600;
-        margin-top: 6px;
-        margin-bottom: 10px;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.18);
-    ">
-        {T["supported_formats"]}
-    </div>
-    """,
-    unsafe_allow_html=True
-)
-
-st.markdown(
-    '<div style="height:1px; background:rgba(255,255,255,0.12); margin:10px 0 6px 0;"></div>',
-    unsafe_allow_html=True
-)
-
-# =========================================================
-# MAIN
-# =========================================================
-if uploaded_file is not None:
+    prompt = f"Translate this UI text into {target_language}. Keep it short:\n{text}"
     try:
-        df, mode, raw_text = load_any_file(uploaded_file)
-        st.session_state.loaded_mode = mode
-        st.session_state.raw_text_content = raw_text
+        return call_openai(prompt)
+    except:
+        return text
 
-        numeric_cols = df.select_dtypes(include="number").columns.tolist()
-        categorical_cols = df.select_dtypes(include=["object", "category", "bool"]).columns.tolist()
+def t(key):
+    lang_name = st.session_state.get("app_language", "English")
+    lang_code = LANGUAGES.get(lang_name, "en")
 
-        st.subheader(T["data_overview"])
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric(T["rows"], df.shape[0])
-        m2.metric(T["columns"], df.shape[1])
-        m3.metric(T["missing"], int(df.isna().sum().sum()))
-        m4.metric(T["duplicates"], int(df.duplicated().sum()))
+    # 1. Try full translations
+    text = TRANSLATIONS.get(lang_code, {}).get(key)
 
-        if mode == "text":
-            st.warning(T["text_mode_warning"])
+    # 2. Try UI_TEXT
+    if not text:
+        text = UI_TEXT.get(lang_name, {}).get(key)
 
-        st.markdown("---")
+    # 3. Fallback to English
+    if not text:
+        text = UI_TEXT.get("English", {}).get(key) or TRANSLATIONS.get("en", {}).get(key)
 
-        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
-            [
-                T["overview_tab"],
-                T["insight_tab"],
-                T["charts_tab"],
-                T["ai_tab"],
-                T["translate_tab"],
-                T["export_tab"],
-            ]
+    # 4. FINAL fallback → AI translation (THIS is new)
+    text = (
+        TRANSLATIONS.get(lang_code, {}).get(key)
+        or UI_TEXT.get(lang_name, {}).get(key)
+        or UI_TEXT.get("English", {}).get(key)
+        or TRANSLATIONS.get("en", {}).get(key)
+    )
+
+    # 🚀 Add AI translation as final step
+    if text and lang_code != "en":
+        return auto_translate(text, lang_name)
+
+    return text or key
+    
+    
+def now_iso() -> str:
+    return datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+
+
+def hash_text(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def get_base64_image(path: Path) -> str:
+    if not path.exists():
+        return ""
+    try:
+        return base64.b64encode(path.read_bytes()).decode("utf-8")
+    except Exception:
+        return ""
+
+
+def current_user_email() -> str:
+    user = st.session_state.get("auth_user") or {}
+    return str(user.get("email", "")).strip().lower()
+
+
+def current_language() -> str:
+    return st.session_state.get("app_language", "English")
+
+
+def user_key_from_email(email: str) -> str:
+    return hash_text(email.strip().lower())[:20]
+
+
+def user_upload_dir(email: str) -> Path:
+    path = USER_UPLOADS_DIR / user_key_from_email(email)
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def user_report_dir(email: str) -> Path:
+    path = USER_REPORTS_DIR / user_key_from_email(email)
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def ai_available() -> bool:
+    return client is not None
+
+
+def auth_configured() -> bool:
+    return bool(SUPABASE_URL and SUPABASE_ANON_KEY)
+
+
+def detect_user_language() -> str:
+    try:
+        loc = locale.getdefaultlocale()[0]
+        if loc is None:
+            return "English"
+        loc = loc.lower()
+        if loc.startswith("ht"):
+            return "Haitian Creole"
+        if loc.startswith("fr"):
+            return "French"
+        if loc.startswith("es"):
+            return "Spanish"
+        if loc.startswith("de"):
+            return "German"
+        if loc.startswith("pt"):
+            return "Portuguese"
+        if loc.startswith("ar"):
+            return "Arabic"
+        return "English"
+    except Exception:
+        return "English"
+
+
+def load_logo_base64() -> str:
+    return get_base64_image(LOGO_PATH)
+
+
+logo_base64 = load_logo_base64()
+
+
+# =========================================================
+# PREMIUM ACCESS CONTROL
+# =========================================================
+FREE_PLAN = "free"
+PREMIUM_PLAN = "premium"
+
+PREMIUM_FEATURES = {
+    "ai_insights": True,
+    "forecast": True,
+    "saved_reports": True,
+    "data_doctor_autofix": True,
+    "shareable_reports": True,
+}
+
+
+def get_user_plan() -> str:
+    email = current_user_email()
+
+    if st.session_state.get("developer_premium_override"):
+        return PREMIUM_PLAN
+    if email and email in PREMIUM_USERS:
+        return PREMIUM_PLAN
+    if st.session_state.get("premium_status") == "premium":
+        return PREMIUM_PLAN
+
+    return FREE_PLAN
+
+
+def set_user_plan(plan_name: str) -> None:
+    st.session_state["user_plan"] = plan_name
+    st.session_state["premium_status"] = (
+        "premium" if plan_name == PREMIUM_PLAN else "inactive"
+    )
+
+
+def is_premium_user() -> bool:
+    return get_user_plan() == PREMIUM_PLAN
+
+
+def feature_enabled(feature_name: str) -> bool:
+    if feature_name not in PREMIUM_FEATURES:
+        return True
+    if PREMIUM_FEATURES[feature_name]:
+        return is_premium_user()
+    return True
+
+
+def require_feature(feature_name: str, title: str = "Premium Feature") -> bool:
+    if feature_enabled(feature_name):
+        return True
+    render_message(
+        f"{title} is available on Premium. Upgrade to unlock full access.",
+        "warning",
+    )
+    return False
+
+
+def analysis_allowed() -> Tuple[bool, str]:
+    if is_premium_user():
+        return True, ""
+    if st.session_state.get("usage_count", 0) < FREE_ANALYSIS_LIMIT:
+        return True, ""
+    return False, f"Free analysis limit reached ({FREE_ANALYSIS_LIMIT}). Upgrade to continue."
+
+
+def increment_usage() -> None:
+    st.session_state["usage_count"] = st.session_state.get("usage_count", 0) + 1
+
+
+def process_stripe_return() -> None:
+    params = st.query_params
+    payment = str(params.get("payment", "")).lower()
+    status = str(params.get("status", "")).lower()
+    plan = str(params.get("plan", "")).lower()
+    session_id = str(params.get("session_id", "")).strip()
+
+    success = payment == "success" or status == "success"
+    if not success:
+        return
+
+    payment_key = f"{plan}:{session_id or 'no_session'}"
+    if st.session_state.get("stripe_last_payment") == payment_key:
+        return
+
+    if plan in ["premium", "monthly", "pro"]:
+        set_user_plan(PREMIUM_PLAN)
+        st.session_state["stripe_last_payment"] = payment_key
+        render_message(
+            "Payment confirmed. Premium access has been activated automatically.",
+            "success",
+        )
+    elif plan in ["one_time", "onetime", "single"]:
+        st.session_state["stripe_last_payment"] = payment_key
+        render_message(
+            "Payment confirmed. One-time access has been activated.",
+            "success",
         )
 
-        with tab1:
-            st.markdown(f"""
-            <div class="section-wrap">
-                <div class="section-title">{T["overview_tab"]}</div>
-                <div class="section-subtle">{T["tagline"]}</div>
-            """, unsafe_allow_html=True)
+                
+def build_stripe_success_url(plan_name: str) -> str:
+    if STRIPE_SUCCESS_URL:
+        base = STRIPE_SUCCESS_URL
+    elif APP_BASE_URL:
+        base = APP_BASE_URL
+    else:
+        base = ""
+    if not base:
+        return ""
+    separator = "&" if "?" in base else "?"
+    return f"{base}{separator}payment=success&plan={plan_name}&session_id={{CHECKOUT_SESSION_ID}}"
 
-            st.subheader(T["snapshot"])
-            st.dataframe(df.head(20))
 
-            if mode == "text" and raw_text:
-                st.markdown(f"### {T['text_preview']}")
-                st.text_area(T["preview"], raw_text[:4000], height=220)
+def safe_remove_tree(path: Path) -> None:
+    if path.exists() and path.is_dir():
+        shutil.rmtree(path, ignore_errors=True)
 
-            left_col, right_col = st.columns(2)
 
-            with left_col:
-                st.markdown(f"### {T['column_summary']}")
-                column_info = pd.DataFrame({
-                    "Column": df.columns,
-                    "Type": [str(df[col].dtype) for col in df.columns],
-                    "Missing Values": [int(df[col].isna().sum()) for col in df.columns],
-                    "Unique Values": [int(df[col].nunique(dropna=True)) for col in df.columns],
-                })
-                st.dataframe(column_info)
+def file_size_ok(uploaded_file) -> Tuple[bool, str]:
+    if uploaded_file is None:
+        return False, "No file uploaded."
+    size_mb = uploaded_file.size / (1024 * 1024)
+    if size_mb > MAX_UPLOAD_MB:
+        return False, f"File is {size_mb:.1f}MB. Max allowed size is {MAX_UPLOAD_MB}MB."
+    return True, ""
 
-            with right_col:
-                st.markdown(f"### {T['data_quality_notes']}")
-                st.write(f"- {T['missing']}: {int(df.isna().sum().sum())}")
-                st.write(f"- {T['duplicates']}: {int(df.duplicated().sum())}")
-                if len(numeric_cols) == 0:
-                    st.write(f"- {T['no_numeric']}")
-                if len(categorical_cols) == 0:
-                    st.write(f"- {T['no_categorical']}")
 
-            st.markdown(f"### {T['cleaning_assistant']}")
-            if st.button(T["show_cleaning"]):
-                missing_cols = df.columns[df.isna().sum() > 0].tolist()
-                if missing_cols:
-                    st.write(T["missing_cols"])
-                    for col in missing_cols:
-                        st.write(f"- {col}: {int(df[col].isna().sum())}")
-                else:
-                    st.success(T["no_missing"])
+# =========================================================
+# SEMANTIC METRICS
+# =========================================================
+METRIC_DEFINITIONS = {
+    "record_count": {
+        "label": "Records",
+        "description": "Total rows in dataset",
+        "format": "integer",
+        "required_columns": [],
+    },
+    "column_count": {
+        "label": "Columns",
+        "description": "Total fields available",
+        "format": "integer",
+        "required_columns": [],
+    },
+    "missing_value_rate": {
+        "label": "Missing Rate",
+        "description": "Share of missing data",
+        "format": "percent",
+        "required_columns": [],
+    },
+    "duplicate_rate": {
+        "label": "Duplicate Rate",
+        "description": "Share of duplicate rows",
+        "format": "percent",
+        "required_columns": [],
+    },
+    "revenue": {
+        "label": "Revenue",
+        "description": "Total sales value",
+        "format": "currency",
+        "required_columns": ["Sales"],
+    },
+    "customers": {
+        "label": "Customers",
+        "description": "Total customer count",
+        "format": "integer",
+        "required_columns": ["Customers"],
+    },
+    "returns": {
+        "label": "Returns",
+        "description": "Total returns count",
+        "format": "integer",
+        "required_columns": ["Returns"],
+    },
+}
 
-                duplicates = int(df.duplicated().sum())
-                if duplicates > 0:
-                    st.warning(f"{duplicates} {T['dup_review']}")
-                else:
-                    st.success(T["no_dup"])
 
-            st.markdown("</div>", unsafe_allow_html=True)
+def format_metric_value(value, fmt: str) -> str:
+    try:
+        if value is None or (isinstance(value, float) and pd.isna(value)):
+            return "N/A"
+        if fmt == "currency":
+            return f"${float(value):,.2f}"
+        if fmt == "percent":
+            return f"{float(value) * 100:,.2f}%"
+        if fmt == "integer":
+            return f"{int(round(float(value))):,}"
+        return f"{float(value):,.2f}"
+    except Exception:
+        return str(value)
 
-        with tab2:
-            st.markdown(f"""
-            <div class="section-wrap">
-                <div class="section-title">{T["insight_tab"]}</div>
-                <div class="section-subtle">{T["insight_board_title"]}</div>
-            """, unsafe_allow_html=True)
 
-            st.subheader(T["insight_board_title"])
+def resolve_available_metrics(df: pd.DataFrame) -> dict:
+    available = {}
+    for metric_key, config in METRIC_DEFINITIONS.items():
+        required = config.get("required_columns", [])
+        missing = [col for col in required if col not in df.columns]
+        available[metric_key] = {
+            "available": len(missing) == 0,
+            "missing_columns": missing,
+            "config": config,
+        }
+    return available
 
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric(T["rows"], df.shape[0])
-            c2.metric(T["columns"], df.shape[1])
-            c3.metric(T["missing"], int(df.isna().sum().sum()))
-            c4.metric(T["duplicates"], int(df.duplicated().sum()))
 
-            st.markdown("---")
+def compute_semantic_metrics(df: pd.DataFrame) -> list:
+    metrics = []
+    total_rows = len(df)
+    total_cols = len(df.columns)
+    total_cells = max(total_rows * max(total_cols, 1), 1)
+    available_map = resolve_available_metrics(df)
 
-            left_insight, right_insight = st.columns(2)
+    def add_metric(metric_key: str, raw_value, source_columns=None):
+        config = METRIC_DEFINITIONS[metric_key]
+        metrics.append(
+            {
+                "key": metric_key,
+                "label": config["label"],
+                "description": config["description"],
+                "raw_value": raw_value,
+                "formatted_value": format_metric_value(raw_value, config["format"]),
+                "source_columns": source_columns or config.get("required_columns", []),
+            }
+        )
 
-            with left_insight:
-                st.markdown(f"### {T['numeric_spotlight']}")
-                if numeric_cols:
-                    selected_num_spotlight = st.selectbox(
-                        T["choose_numeric"],
-                        numeric_cols,
-                        key="spotlight_num"
-                    )
-                    st.write(f"**Mean:** {df[selected_num_spotlight].mean():.2f}")
-                    st.write(f"**Median:** {df[selected_num_spotlight].median():.2f}")
-                    st.write(f"**Min:** {df[selected_num_spotlight].min():.2f}")
-                    st.write(f"**Max:** {df[selected_num_spotlight].max():.2f}")
-                    st.write(f"**Std Dev:** {df[selected_num_spotlight].std():.2f}")
-                else:
-                    st.info(T["no_numeric"])
+    add_metric("record_count", total_rows, [])
+    add_metric("column_count", total_cols, [])
+    add_metric(
+        "missing_value_rate",
+        float(df.isna().sum().sum()) / total_cells,
+        list(df.columns),
+    )
+    add_metric(
+        "duplicate_rate",
+        float(df.duplicated().sum()) / max(total_rows, 1),
+        list(df.columns),
+    )
 
-            with right_insight:
-                st.markdown(f"### {T['category_spotlight']}")
-                if categorical_cols:
-                    selected_cat_spotlight = st.selectbox(
-                        T["choose_categorical"],
-                        categorical_cols,
-                        key="spotlight_cat"
-                    )
-                    value_counts_df = (
-                        df[selected_cat_spotlight]
-                        .astype(str)
-                        .value_counts(dropna=False)
-                        .head(10)
-                        .reset_index()
-                    )
-                    value_counts_df.columns = [selected_cat_spotlight, "Count"]
-                    st.dataframe(value_counts_df)
-                else:
-                    st.info(T["no_categorical"])
+    if available_map["revenue"]["available"]:
+        add_metric(
+            "revenue",
+            pd.to_numeric(df["Sales"], errors="coerce").fillna(0).sum(),
+            ["Sales"],
+        )
+    if available_map["customers"]["available"]:
+        add_metric(
+            "customers",
+            pd.to_numeric(df["Customers"], errors="coerce").fillna(0).sum(),
+            ["Customers"],
+        )
+    if available_map["returns"]["available"]:
+        add_metric(
+            "returns",
+            pd.to_numeric(df["Returns"], errors="coerce").fillna(0).sum(),
+            ["Returns"],
+        )
 
-            st.markdown("---")
-            st.markdown(f"### {T['quality_snapshot']}")
+    return metrics
 
-            if df.isna().sum().sum() > 0:
-                st.warning(T["contains_missing"])
-            else:
-                st.success(T["no_missing_detected"])
 
-            if df.duplicated().sum() > 0:
-                st.warning(T["contains_dup"])
-            else:
-                st.success(T["no_dup_detected"])
+def render_semantic_metric_cards(metrics: list, max_items: int = 6) -> None:
+    if not metrics:
+        return
+    selected = metrics[:max_items]
+    card_html = '<div class="semantic-metric-grid">'
+    for metric in selected:
+        card_html += f"""
+        <div class="semantic-metric-card">
+            <div class="semantic-metric-name">{html.escape(metric['label'])}</div>
+            <div class="semantic-metric-value">{html.escape(metric['formatted_value'])}</div>
+            <div class="semantic-metric-desc">{html.escape(metric['description'])}</div>
+        </div>
+        """
+    card_html += "</div>"
+    st.markdown(card_html, unsafe_allow_html=True)
 
-            st.markdown("---")
-            st.markdown(f"### {T['correlation_map']}")
 
-            if len(numeric_cols) >= 2:
-                corr = df[numeric_cols].corr(numeric_only=True)
-                fig, ax = plt.subplots(figsize=(8, 5))
-                cax = ax.matshow(corr, cmap="Greens")
-                fig.colorbar(cax)
-                ax.set_xticks(range(len(corr.columns)))
-                ax.set_yticks(range(len(corr.columns)))
-                ax.set_xticklabels(corr.columns, rotation=45, ha="left")
-                ax.set_yticklabels(corr.columns)
-                st.pyplot(fig)
-            else:
-                st.info(T["need_two_numeric"])
+# =========================================================
+# STYLING / CSS
+# =========================================================
+def inject_global_css() -> None:
+    st.markdown(
+        """
+        <style>
+        html, body, [class*="css"] {
+            font-family: Arial, sans-serif;
+        }
 
-            st.markdown(f"### {T['quick_text_insights']}")
-            st.write("- Review the KPI cards first to understand size and quality.")
-            st.write("- Use the numeric spotlight to detect spread and outliers.")
-            st.write("- Use the category spotlight to spot dominant groups or imbalances.")
-            st.write("- Use the correlation map to identify relationships worth investigating.")
+        .stApp {
+            background: linear-gradient(135deg, #081018 0%, #0c1622 45%, #111827 100%);
+        }
 
-            st.markdown("</div>", unsafe_allow_html=True)
+        .block-container {
+            padding-top: 0.5rem !important;
+            padding-bottom: 0.4rem !important;
+        }
 
-        with tab3:
-            st.markdown(f"""
-            <div class="section-wrap">
-                <div class="section-title">{T["charts_tab"]}</div>
-                <div class="section-subtle">{T["charts_title"]}</div>
-            """, unsafe_allow_html=True)
+        .hero-wrap {
+            border: 1px solid rgba(34,197,94,0.25);
+            backdrop-filter: blur(6px);
+            border-radius: 18px;
+            padding: 12px;
+            margin-bottom: 10px;
+            box-shadow: 0 10px 28px rgba(34,197,94,0.10);
+        }
 
-            st.subheader(T["charts_title"])
+        @keyframes greenFlow {
+            0%   { background-position: 0% 50%; }
+            100% { background-position: 100% 50%; }
+        }
 
-            chart_type = st.selectbox(
-                T["chart_type"],
-                [T["histogram"], T["box_plot"], T["bar_chart"], T["line_chart"]]
-            )
+        @keyframes greenGlowPulse {
+            0%   { box-shadow: 0 6px 18px rgba(34,197,94,0.35), 0 0 14px rgba(34,197,94,0.25); }
+            50%  { box-shadow: 0 8px 24px rgba(34,197,94,0.60), 0 0 28px rgba(34,197,94,0.45); }
+            100% { box-shadow: 0 6px 18px rgba(34,197,94,0.35), 0 0 14px rgba(34,197,94,0.25); }
+        }
+        
 
-            selected_num = st.selectbox(
-                T["choose_numeric_chart"],
-                numeric_cols if numeric_cols else [T["no_numeric"]],
-                key="chart_num"
-            )
+        .top-green-bar {
+            width: 100%;
+            height: 40px;
+            background: linear-gradient(
+                90deg,
+                #001f12,
+                #064e3b,
+                #00ff7f,
+                #22c55e,
+                #ccff00,
+                #00ff7f,
+                #064e3b,
+                #001f12                
+            );
+            background-size: 450% 100%;
+            animation: greenFlow 3.5s linear infinite, greenGlowPulse 2.8s ease-in-out infinite;
+            border-radius: 0 0 22px 22px;
+            margin-top: -4px;
+            box-shadow:
+                0 8px 24px rgba(34, 197, 94, 0.75),
+                0 0 38px rgba(0, 255, 127, 0.55),
+                inset 0 -3px 10px rgba(255, 255, 255, 0.28);
+            margin-bottom: 12px;
+        }
+        
+        /* Restore original sidebar background */
+        section[data-testid="stSidebar"] {
+            background-color: #f8fafc !important;  /* light gray */
+        }
 
-            selected_cat = st.selectbox(
-                T["choose_cat_filter"],
-                [T["none"]] + categorical_cols,
-                key="chart_cat"
-            )
+        .hero-main-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 18px;
+            flex-wrap: wrap;
+        }
+        
+        div[data-testid="stTabs"] {
+            margin-top: 6px !important;
+        }
 
-            filtered_df = df.copy()
+        .hero-left {
+            flex: 1 1 560px;
+        }
 
-            if selected_cat != T["none"]:
-                category_values = (
-                    filtered_df[selected_cat]
-                    .dropna()
-                    .astype(str)
-                    .unique()
-                    .tolist()
-                )
-                if category_values:
-                    category_value = st.selectbox(
-                        f"{T['select_value']} {selected_cat}",
-                        category_values
-                    )
-                    filtered_df = filtered_df[filtered_df[selected_cat].astype(str) == category_value]
+        .hero-right {
+            flex: 0 0 240px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
 
-            if numeric_cols and selected_num != T["no_numeric"]:
-                fig, ax = plt.subplots()
+        .blue-top-bar {
+            width: 100%;
+            height: 34px;
 
-                if chart_type == T["histogram"]:
-                    filtered_df[selected_num].dropna().plot(kind="hist", bins=20, ax=ax)
-                    ax.set_title(f"Distribution of {selected_num}")
+        background: linear-gradient(90deg, #001f12, #064e3b, #22c55e, #ccff00, #22c55e, #064e3b);
+        
+        background-size: 300% 100%;
+        animation: greenFlow 6s linear infinite;
 
-                elif chart_type == T["box_plot"]:
-                    filtered_df.boxplot(column=selected_num, ax=ax)
-                    ax.set_title(f"Box Plot of {selected_num}")
+        border-radius: 0 0 18px 18px;
 
-                elif chart_type == T["bar_chart"]:
-                    if selected_cat != T["none"]:
-                        grouped = (
-                            filtered_df.groupby(selected_cat)[selected_num]
-                            .mean()
-                            .sort_values(ascending=False)
-                            .head(10)
-                        )
-                        grouped.plot(kind="bar", ax=ax)
-                        ax.set_title(f"Average {selected_num} by {selected_cat}")
-                    else:
-                        st.info(T["select_cat_for_bar"])
+        margin-top: -7px;
+        margin-bottom: 6px;
 
-                elif chart_type == T["line_chart"]:
-                    date_candidates = [
-                        c for c in filtered_df.columns
-                        if "date" in c.lower() or "year" in c.lower()
-                    ]
-                    if date_candidates:
-                        date_col = st.selectbox(T["choose_date"], date_candidates, key="line_date")
-                        temp_df = filtered_df.copy()
-                        temp_df[date_col] = pd.to_datetime(temp_df[date_col], errors="coerce")
-                        temp_df = temp_df.dropna(subset=[date_col, selected_num]).sort_values(date_col)
-                        ax.plot(temp_df[date_col], temp_df[selected_num])
-                        ax.set_title(f"{selected_num} Over Time")
-                        plt.xticks(rotation=45, ha="right")
-                    else:
-                        st.info(T["no_date"])
+        box-shadow:
+        0 6px 18px rgba(34, 197, 94, 0.45),
+        0 0 20px rgba(34, 197, 94, 0.25);
+    }
 
-                st.pyplot(fig)
-            else:
-                st.info(T["no_numeric"])
+        
+        .hero-brand-row {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+        }
 
-            st.markdown("</div>", unsafe_allow_html=True)
+        .hero-logo img {
+            width: 74px;
+            height: 74px;
+            object-fit: contain;
+            border-radius: 14px;
+            box-shadow: 0 6px 16px rgba(0,0,0,0.16);
+            background: rgba(255,255,255,0.55);
+            padding: 6px;
+        }
 
-        with tab4:
-            st.markdown(f"""
-            <div class="section-wrap">
-                <div class="section-title">{T["ai_tab"]}</div>
-                <div class="section-subtle">{T["ai_insights_title"]}</div>
-            """, unsafe_allow_html=True)
+        .hero-brand-line {
+            font-size: 2rem;
+            font-weight: 900;
+            color: #15803d;
+            line-height: 1.08;
+        }
+        
+        /* Grey control button */
+        button[kind="secondary"],
+        button#control_btn {
+            background: #e5e7eb !important;
+            color: #111827 !important;
+            font-weight: 800 !important;
+            border-radius: 10px !important;
+            border: 1px solid #d1d5db !important;
+        }
+        .hero-tagline-line {
+            font-size: 1.05rem;
+            font-weight: 700;
+            color: #0c4a6e;
+            margin-top: 4px;
+        }
 
-            st.subheader(T["ai_insights_title"])
+        .hero-welcome {
+            font-weight: 900;
+            color: #14532d;
+            text-align: center;
+            font-size: 1.18rem;
+            background: rgba(255,255,255,0.55);
+            border: 1px solid rgba(20,83,45,0.10);
+            border-radius: 16px;
+            padding: 12px 14px;
+            box-shadow: 0 8px 18px rgba(0,0,0,0.12);
+            animation: zoomPulse 1.6s ease-in-out infinite;
+            transform-origin: center center;
+        }
 
-            focus_options = [
-                T["focus_general"],
-                T["focus_sales"],
-                T["focus_marketing"],
-                T["focus_customer"],
-                T["focus_operations"],
-                T["focus_financial"],
-                T["focus_document"],
-            ]
+        @keyframes zoomPulse {
+            0%   { transform: scale(1); }
+            50%  { transform: scale(1.07); }
+            100% { transform: scale(1); }
+        }
 
-            analysis_goal = st.selectbox(T["analysis_focus"], focus_options)
+        .feature-pill-wrap {
+            display: flex;
+            gap: 8px;
+            margin: 10px 0 12px 0;
+            flex-wrap: wrap;
+        }
 
-            st.write(f"{T['free_used']}: {st.session_state.usage_count}/2")
+        .feature-pill {
+            background: #dcfce7;
+            padding: 6px 12px;
+            border-radius: 999px;
+            font-weight: 700;
+            color: #14532d;
+        }
 
-            if st.session_state.usage_count >= 2:
-                st.error(T["free_limit"])
+        .trust-bar {
+            background: #fef3c7;
+            padding: 10px 12px;
+            border-radius: 12px;
+            font-weight: 700;
+            margin: 10px 0 14px 0;
+            color: #111827;
+        }
 
-            if st.button(T["analyze_data"]):
-                if st.session_state.usage_count >= 2:
-                    st.stop()
+        .status-chip-wrap {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin: 10px 0 16px 0;
+        }
 
-                with st.spinner(T["generating"]):
-                    summary = build_data_summary(df, mode, raw_text)
+        .status-chip {
+            padding: 7px 12px;
+            border-radius: 999px;
+            font-weight: 800;
+            background: rgba(255,255,255,0.08);
+            color: #e2e8f0;
+            border: 1px solid rgba(255,255,255,0.08);
+        }
+        
+        /* More space before the tabs row */
+        div[data-testid="stTabs"] {
+            margin-top: 18px !important;
+        }
 
-                    response = client.responses.create(
-                        model="gpt-5",
-                        input=f"""
+        .semantic-metric-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 12px;
+            margin: 10px 0 16px 0;
+        }
+
+        .semantic-metric-card {
+            background: linear-gradient(135deg, rgba(255,255,255,0.98), rgba(248,250,252,0.96));
+            border: 1px solid rgba(15,23,42,0.08);
+            border-radius: 18px;
+            padding: 14px;
+            box-shadow: 0 8px 20px rgba(0,0,0,0.08);
+        }
+
+        .semantic-metric-name {
+            font-size: 0.85rem;
+            color: #475569;
+            font-weight: 700;
+        }
+
+        .semantic-metric-value {
+            font-size: 1.25rem;
+            color: #0f172a;
+            font-weight: 900;
+            margin: 6px 0;
+        }
+
+        .semantic-metric-desc {
+            font-size: 0.82rem;
+            color: #64748b;
+        }
+
+        div[data-testid="stFileUploader"] section {
+            border: 2px dashed #22c55e !important;
+            background: rgba(255,255,255,0.03) !important;
+            border-radius: 16px !important;
+            margin-bottom: 6px !important;   /* ↓ reduce gap */
+        }
+                
+        /* Drag and drop text → white */
+        div[data-testid="stFileUploader"] small,
+        div[data-testid="stFileUploader"] span,
+        div[data-testid="stFileUploader"] label,
+        div[data-testid="stFileUploader"] p {
+            color: #ffffff !important;
+        }
+
+        div[data-testid="stFileUploader"] button {
+            background: #facc15 !important;
+            color: #111827 !important;
+            border-radius: 10px !important;
+            border: none !important;
+            font-weight: 800 !important;
+        }
+
+        section[data-testid="stSidebar"] div[data-testid="stButton"] button,
+        section[data-testid="stSidebar"] div[data-testid="stLinkButton"] a {
+            background: #f5f5dc !important;
+            color: #111827 !important;
+            font-weight: 800 !important;
+            border-radius: 10px !important;
+            border: none !important;
+        }
+
+        div[data-testid="stTextInput"] input::placeholder,
+        div[data-testid="stTextInputRootElement"] input::placeholder,
+        input::placeholder {
+            color: #94a3b8 !important;
+            opacity: 1 !important;
+        }
+
+        footer { visibility: hidden; }
+        
+        /* Bigger top tabs: Dashboard → Legal */
+        button[data-baseweb="tab"] {
+            font-size: 1.08rem !important;
+            font-weight: 800 !important;
+            padding: 14px 22px !important;
+            min-height: 56px !important;
+            border-radius: 14px !important;
+            cursor: pointer !important;
+        }
+
+        button[data-baseweb="tab"] p {
+            font-size: 1.08rem !important;
+            font-weight: 800 !important;
+        }
+        
+        /* Gradient green divider */
+        .green-gradient-divider {
+            border: none;
+            height: 3px;
+            background: linear-gradient(to right, transparent, #22c55e, #16a34a, #22c55e, transparent);
+            margin: 14px 0 18px 0;
+            border-radius: 999px;
+        }
+        
+        /* Hand cursor on clickable items */
+        button,
+        button * ,
+        a,
+        a *,
+        div[data-testid="stFileUploader"] button,
+        button[data-baseweb="tab"],
+        .stSelectbox,
+        .stSelectbox * {
+        cursor: pointer !important;
+    }
+/* SAFE readability fix: text only, do not touch buttons */
+div[data-testid="stMarkdownContainer"] h1,
+div[data-testid="stMarkdownContainer"] h2,
+div[data-testid="stMarkdownContainer"] h3,
+div[data-testid="stMarkdownContainer"] h4,
+div[data-testid="stMarkdownContainer"] p,
+div[data-testid="stMarkdownContainer"] li {
+    color: #f8fafc !important;
+}
+
+/* Dashboard metric labels/values only */
+div[data-testid="stMetric"] label,
+div[data-testid="stMetric"] div {
+    color: #f8fafc !important;
+}
+
+/* Dataframe area spacing only */
+div[data-testid="stDataFrame"] {
+    border-radius: 12px !important;
+}
+
+/* Keep sidebar button/link text dark and visible */
+section[data-testid="stSidebar"] button,
+section[data-testid="stSidebar"] button *,
+section[data-testid="stSidebar"] a,
+section[data-testid="stSidebar"] a * {
+    color: #111827 !important;
+}
+
+section[data-testid="stSidebar"] h1,
+section[data-testid="stSidebar"] h2,
+section[data-testid="stSidebar"] h3,
+section[data-testid="stSidebar"] p,
+section[data-testid="stSidebar"] label {
+    color: #111827 !important;
+}
+
+/* Keep main buttons readable */
+div[data-testid="stButton"] button,
+div[data-testid="stButton"] button *,
+div[data-testid="stDownloadButton"] button,
+div[data-testid="stDownloadButton"] button * {
+    color: #111827 !important;
+    font-weight: 800 !important;
+}
+
+/* Keep footer visible */
+.footer-note {
+    text-align: center;
+    font-size: 0.85rem;
+    color: #c3cfde !important;
+    margin-top: 20px;
+    margin-bottom: 18px;
+}
+
+
+/* Keep sidebar inputs readable */
+section[data-testid="stSidebar"] input {
+    color: #111827 !important;
+    background: #ffffff !important;
+}
+
+/* Keep sidebar buttons readable */
+section[data-testid="stSidebar"] button,
+section[data-testid="stSidebar"] button *,
+section[data-testid="stSidebar"] a,
+section[data-testid="stSidebar"] a * {
+    color: #111827 !important;
+    opacity: 1 !important;
+    visibility: visible !important;
+}
+
+/* Password eye icon fix */
+section[data-testid="stSidebar"] div[data-baseweb="input"] {
+    background-color: #ffffff !important;
+}
+
+section[data-testid="stSidebar"] div[data-baseweb="base-input"] {
+    background-color: #ffffff !important;
+}
+
+section[data-testid="stSidebar"] input {
+    background-color: #ffffff !important;
+    color: #111827 !important;
+}
+
+section[data-testid="stSidebar"] svg {
+    color: #111827 !important;
+    fill: #111827 !important;
+}
+
+/* Remove dark patch behind password eye button */
+section[data-testid="stSidebar"] div[data-baseweb="input"] > div {
+    background-color: #ffffff !important;
+}
+
+section[data-testid="stSidebar"] button[aria-label*="password"],
+section[data-testid="stSidebar"] button[title*="password"],
+section[data-testid="stSidebar"] button {
+    background-color: #ffffff !important;
+    color: #111827 !important;
+}
+
+/* Fix checkbox text under "Use Sample Dataset" */
+section[data-testid="stSidebar"] div[data-baseweb="checkbox"] label {
+    color: #ffffff !important;
+}
+
+/* Fix the check icon */
+section[data-testid="stSidebar"] div[data-baseweb="checkbox"] svg {
+    fill: #ffffff !important;
+    color: #ffffff !important;
+}
+
+/* Fix blurry text in upgrade section */
+div:has(> a[href*="stripe"]) {
+    transform: none !important;
+    filter: none !important;
+    opacity: 1 !important;
+}
+
+/* Password eye icon dark patch fix */
+section[data-testid="stSidebar"] div[data-baseweb="input"],
+section[data-testid="stSidebar"] div[data-baseweb="base-input"],
+section[data-testid="stSidebar"] div[data-baseweb="input"] > div,
+section[data-testid="stSidebar"] div[data-baseweb="base-input"] > div {
+    background-color: #ffffff !important;
+}
+
+section[data-testid="stSidebar"] input {
+    background-color: #ffffff !important;
+    color: #111827 !important;
+}
+
+section[data-testid="stSidebar"] button[aria-label*="password"],
+section[data-testid="stSidebar"] button[title*="password"] {
+    background-color: #ffffff !important;
+    color: #111827 !important;
+    border: none !important;
+}
+
+.how-card *,
+section[data-testid="stSidebar"] .how-card * {
+    color: #111827 !important;
+    opacity: 1 !important;
+    visibility: visible !important;
+}
+
+.how-title,
+section[data-testid="stSidebar"] .how-title {
+    color: #14532d !important;
+    font-size: 1.02rem !important;
+    font-weight: 900 !important;
+    margin-bottom: 8px !important;
+}
+
+.how-text,
+section[data-testid="stSidebar"] .how-text {
+    color: #111827 !important;
+    line-height: 1.7 !important;
+    font-weight: 700 !important;
+}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+# =========================================================
+# RENDERERS
+# =========================================================
+def render_top_bar() -> None:
+    st.markdown('<div class="top-green-bar"></div>', unsafe_allow_html=True)
+
+def render_hero() -> None:
+    logo_html = (
+        f'<img src="data:image/png;base64,{logo_base64}" alt="ExplainMyData AI Logo">'
+        if logo_base64
+        else ""
+    )
+    st.markdown(
+        f"""
+        <div class="hero-wrap">
+            <div class="hero-main-row">
+                <div class="hero-left">
+                    <div class="hero-brand-row">
+                        <div class="hero-logo">{logo_html}</div>
+                        <div class="hero-brand-stack">
+                            <div class="hero-brand-line">{html.escape(APP_NAME)}</div>
+                            <div class="hero-tagline-line">{html.escape(TAGLINE)}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="hero-right">
+                    <div class="hero-welcome">🚀 Turn messy data into clean business insights</div>
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_feature_pills() -> None:
+    st.markdown(
+        """
+        <div class="feature-pill-wrap">
+            <div class="feature-pill">⚡ Fast Insights</div>
+            <div class="feature-pill">📊 AI Powered</div>
+            <div class="feature-pill">🌍 Global Access</div>
+            <div class="feature-pill">📄 PDF Export</div>
+            <div class="feature-pill">🧠 Business Ready</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_trust_bar() -> None:
+    st.markdown(
+        """
+        <div class="trust-bar">
+            🔐 Secure file handling • Consent-aware AI • Privacy-first design
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_status_strip() -> None:
+    st.markdown(
+        """
+        <div class="status-chip-wrap">
+            <div class="status-chip">🔐 Secure file handling</div>
+            <div class="status-chip">⚡ Fast processing</div>
+            <div class="status-chip">📊 AI-powered insights</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_report_card(title: str, body: str, accent: str = "#22c55e") -> None:
+    st.markdown(
+        f"""
+        <div style="
+            background: linear-gradient(135deg, rgba(255,255,255,0.08), rgba(255,255,255,0.03));
+            border-left: 5px solid {accent};
+            border-radius: 18px;
+            padding: 16px;
+            margin: 10px 0;
+            color: #f8fafc;
+            box-shadow: 0 8px 22px rgba(0,0,0,0.16);
+        ">
+            <div style="font-size:1.05rem;font-weight:900;margin-bottom:8px;">{html.escape(title)}</div>
+            <div style="font-size:0.98rem;line-height:1.65;white-space:pre-wrap;">{html.escape(body)}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_message(message: str, kind: str = "info") -> None:
+    styles = {
+        "info": {
+            "bg": "linear-gradient(135deg, rgba(37,99,235,0.16), rgba(30,64,175,0.10))",
+            "border": "#60a5fa",
+            "text": "#eff6ff",
+            "icon": "ℹ️",
+        },
+        "success": {
+            "bg": "linear-gradient(135deg, rgba(22,163,74,0.16), rgba(21,128,61,0.10))",
+            "border": "#4ade80",
+            "text": "#f0fdf4",
+            "icon": "✅",
+        },
+        "warning": {
+            "bg": "linear-gradient(135deg, rgba(245,158,11,0.16), rgba(180,83,9,0.10))",
+            "border": "#fbbf24",
+            "text": "#fffbeb",
+            "icon": "⚠️",
+        },
+        "error": {
+            "bg": "linear-gradient(135deg, rgba(239,68,68,0.16), rgba(153,27,27,0.10))",
+            "border": "#f87171",
+            "text": "#fef2f2",
+            "icon": "❌",
+        },
+    }
+    cfg = styles.get(kind, styles["info"])
+    st.markdown(
+        f"""
+        <div style="
+            background: {cfg['bg']};
+            border: 1px solid {cfg['border']};
+            border-left: 5px solid {cfg['border']};
+            border-radius: 16px;
+            padding: 12px 14px;
+            margin: 10px 0;
+            color: {cfg['text']};
+            font-weight: 700;
+            box-shadow: 0 8px 20px rgba(0,0,0,0.12);
+        ">
+            <span style="margin-right:8px;">{cfg['icon']}</span>{html.escape(str(message))}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_privacy_policy() -> None:
+    st.markdown("### Privacy Policy")
+    st.markdown(
+        """
+- Uploaded files are processed to create analysis, charts, OCR results, reports, translations, and user-requested features.
+- If you sign in, files and reports may be stored in your user workspace.
+- If AI is enabled, selected content may be sent to your configured AI provider.
+- Secure deployment still depends on HTTPS, secret management, and proper hosting.
+        """
+    )
+
+
+def render_terms_of_service() -> None:
+    st.markdown("### Terms of Service")
+    st.markdown(
+        """
+- AI outputs may be incomplete or inaccurate and should be reviewed before business use.
+- Users must not upload unlawful content or data they do not have permission to process.
+- Premium functionality depends on payment and deployment configuration.
+        """
+    )
+
+
+def render_data_handling_notice() -> None:
+    st.markdown("### How your data is handled")
+    st.markdown(
+        """
+1. Uploaded files are parsed to create summaries, charts, OCR results, and AI insights.
+2. If signed in, files and reports can be saved under your user workspace.
+3. If AI analysis is enabled, selected content may be sent to your configured AI provider.
+4. You can delete saved local data from the app controls.
+        """
+    )
+
+
+# =========================================================
+# AUTH
+# =========================================================
+def local_login(email: str, password: str) -> Tuple[bool, str]:
+    if not email or not password:
+        return False, "Please enter your email and password."
+    st.session_state["authenticated"] = True
+    st.session_state["auth_user"] = {"email": email.strip().lower()}
+    return True, "Logged in successfully."
+
+
+def local_create_account(email: str, password: str) -> Tuple[bool, str]:
+    if not email or not password:
+        return False, "Please enter your email and password."
+    st.session_state["authenticated"] = True
+    st.session_state["auth_user"] = {"email": email.strip().lower()}
+    return True, "Account created successfully."
+
+
+def logout() -> None:
+    st.session_state["authenticated"] = False
+    st.session_state["auth_user"] = None
+    set_user_plan(FREE_PLAN)
+
+
+# =========================================================
+# FILE LOADERS
+# =========================================================
+def load_structured_data(uploaded_file) -> pd.DataFrame:
+    suffix = Path(uploaded_file.name).suffix.lower()
+    if suffix == ".csv":
+        return pd.read_csv(uploaded_file)
+    if suffix in [".xlsx", ".xls"]:
+        return pd.read_excel(uploaded_file)
+    raise ValueError("Unsupported structured file type.")
+
+
+def extract_text_from_txt(uploaded_file) -> str:
+    return uploaded_file.getvalue().decode("utf-8", errors="ignore")
+
+
+def extract_text_from_docx(uploaded_file) -> str:
+    if Document is None:
+        raise RuntimeError("python-docx is not installed.")
+    doc = Document(io.BytesIO(uploaded_file.getvalue()))
+    return "\n".join([p.text for p in doc.paragraphs if p.text.strip()])
+
+
+def extract_text_from_pdf(uploaded_file) -> str:
+    if fitz is None:
+        raise RuntimeError("PyMuPDF is not installed.")
+    text_parts = []
+    pdf = fitz.open(stream=uploaded_file.getvalue(), filetype="pdf")
+    for page in pdf:
+        text_parts.append(page.get_text())
+    return "\n".join(text_parts)
+
+
+def extract_text_from_image(image: Image.Image) -> str:
+    if pytesseract is None:
+        return "OCR unavailable because pytesseract is not installed."
+    return pytesseract.image_to_string(image)
+
+
+def preprocess_image_for_ocr(
+    image: Image.Image,
+    grayscale=True,
+    autocontrast=True,
+    sharpen=True,
+    threshold=False,
+    threshold_value=160,
+) -> Image.Image:
+    processed = image.copy()
+    if grayscale:
+        processed = ImageOps.grayscale(processed)
+    if autocontrast:
+        processed = ImageOps.autocontrast(processed)
+    if sharpen:
+        processed = processed.filter(ImageFilter.SHARPEN)
+    if threshold:
+        processed = processed.point(lambda p: 255 if p > threshold_value else 0)
+    return processed
+
+
+def extract_text_from_image_with_options(
+    image: Image.Image,
+    grayscale=True,
+    autocontrast=True,
+    sharpen=True,
+    threshold=False,
+    threshold_value=160,
+) -> Tuple[str, Image.Image]:
+    processed = preprocess_image_for_ocr(
+        image,
+        grayscale,
+        autocontrast,
+        sharpen,
+        threshold,
+        threshold_value,
+    )
+    text = extract_text_from_image(processed)
+    return text, processed
+
+
+def load_zip_preview(uploaded_file) -> Tuple[pd.DataFrame, str]:
+    with zipfile.ZipFile(io.BytesIO(uploaded_file.getvalue())) as zf:
+        names = zf.namelist()
+    df = pd.DataFrame({"zip_members": names})
+    raw_text = "ZIP contains:\n" + "\n".join(names[:300])
+    return df, raw_text
+
+
+def build_data_summary(df: pd.DataFrame, mode: str, raw_text: str) -> str:
+    if mode == "structured":
+        preview = df.head(10).to_string(index=False)
+        return f"""
+Structured dataset shape: {df.shape[0]} rows x {df.shape[1]} columns
+Columns: {', '.join(df.columns.astype(str).tolist()[:50])}
+Preview:
+{preview}
+"""
+    if mode == "text":
+        return f"""
+Text dataset shape: {df.shape[0]} rows x {df.shape[1]} columns
+Text preview:
+{raw_text[:5000]}
+"""
+    if mode == "image":
+        return f"""
+Image metadata table shape: {df.shape[0]} rows x {df.shape[1]} columns
+OCR preview:
+{raw_text[:3000] if raw_text else 'No OCR text available.'}
+"""
+    return "No summary available."
+
+
+def parse_uploaded_file(uploaded_file) -> Tuple[pd.DataFrame, str, str]:
+    suffix = Path(uploaded_file.name).suffix.lower().replace(".", "")
+
+    if suffix in ["csv", "xlsx", "xls"]:
+        df = load_structured_data(uploaded_file)
+        return df, "structured", ""
+
+    if suffix == "txt":
+        text = extract_text_from_txt(uploaded_file)
+        df = pd.DataFrame({"text": text.splitlines() or [text]})
+        return df, "text", text
+
+    if suffix == "docx":
+        text = extract_text_from_docx(uploaded_file)
+        df = pd.DataFrame({"text": text.splitlines() or [text]})
+        return df, "text", text
+
+    if suffix == "pdf":
+        text = extract_text_from_pdf(uploaded_file)
+        df = pd.DataFrame({"text": text.splitlines() or [text]})
+        return df, "text", text
+
+    if suffix in ["png", "jpg", "jpeg", "webp"]:
+        image = Image.open(io.BytesIO(uploaded_file.getvalue()))
+        text = extract_text_from_image(image)
+        df = pd.DataFrame(
+            {"image_width": [image.size[0]], "image_height": [image.size[1]]}
+        )
+        st.session_state["ocr_preview"] = image
+        st.session_state["ocr_text"] = text
+        return df, "image", text
+
+    if suffix == "zip":
+        zip_df, zip_text = load_zip_preview(uploaded_file)
+        return zip_df, "text", zip_text
+
+    raise ValueError("Unsupported file type.")
+
+
+def save_uploaded_file_for_user(email: str, uploaded_file) -> Optional[Path]:
+    if not email or uploaded_file is None:
+        return None
+    target = user_upload_dir(email) / uploaded_file.name
+    try:
+        target.write_bytes(uploaded_file.getvalue())
+        return target
+    except Exception:
+        return None
+
+
+# =========================================================
+# AI
+# =========================================================
+def call_openai(prompt: str) -> str:
+    if not ai_available():
+        raise RuntimeError(
+            "OpenAI is not configured. Add OPENAI_API_KEY to .env or Streamlit secrets."
+        )
+    response = client.responses.create(model=DEFAULT_MODEL, input=prompt)
+    return response.output_text.strip()
+
+
+def generate_ai_analysis(
+    df: pd.DataFrame,
+    mode: str,
+    raw_text: str,
+    focus: str,
+    language: str,
+) -> str:
+    industry = st.session_state.get("industry_template", "General Business")
+    prompt = f"""
 Respond in {language}.
+You are a senior business analyst.
+The selected industry template is: {industry}.
+Tailor insights specifically to this industry.
 
-You are a senior business data analyst.
-
-The user selected this analysis focus: {analysis_goal}
-
-Analyze the uploaded content summary below and provide these sections clearly:
-
+Use the uploaded content summary below.
+Provide these sections clearly:
 1. Executive Summary
 2. Key Insights
 3. What These Insights Mean
@@ -1255,191 +1626,1497 @@ Analyze the uploaded content summary below and provide these sections clearly:
 6. Expected Business Impact
 7. Questions Worth Exploring Next
 
-Instructions:
-- Write in clear, simple language for a non-technical user
+Rules:
+- Be practical and professional
 - Do not invent unsupported facts
-- Be practical, specific, and decision-oriented
-- If the uploaded content is text or document-based, summarize and interpret it intelligently
-- Keep the tone professional and concise
+- If the input is text or image-based, explain what is actually present
+- Keep it concise but useful
 
-Uploaded content summary:
-{summary}
+Content summary:
+{build_data_summary(df, mode, raw_text)}
 """
-                    )
+    return call_openai(prompt)
 
-                    st.session_state.result = response.output_text
-                    st.session_state.translated_result = ""
-                    st.session_state.chat_answer = ""
-                    st.session_state.usage_count += 1
 
-            if st.session_state.result:
-                st.markdown(f"### {T['analysis_results']}")
-                st.write(st.session_state.result)
-
-                st.markdown(f"### {T['how_read_analysis']}")
-                st.info("""
-- Start with the Executive Summary for a quick overview
-- Focus on Recommended Actions for decisions
-- Use Expected Business Impact to understand why it matters
-- Explore Questions Worth Exploring Next to deepen analysis
-""")
-
-                st.download_button(
-                    label=T["download_insights"],
-                    data=st.session_state.result,
-                    file_name="insights.txt",
-                    mime="text/plain"
-                )
-
-            st.markdown("</div>", unsafe_allow_html=True)
-
-        with tab5:
-            st.markdown(f"""
-            <div class="section-wrap">
-                <div class="section-title">{T["translate_tab"]}</div>
-                <div class="section-subtle">{T["translate_title"]}</div>
-            """, unsafe_allow_html=True)
-
-            st.subheader(T["translate_title"])
-
-            translation_language = st.selectbox(
-                T["translation_language"],
-                ["English", "French", "Spanish", "Portuguese", "German", "Arabic", "Haitian Creole", "Chinese", "Japanese"]
-            )
-
-            if not st.session_state.result:
-                st.info(T["generate_first"])
-
-            if st.button(T["translate_insights"]):
-                if not st.session_state.result:
-                    st.warning(T["no_translate_yet"])
-                else:
-                    with st.spinner(f"{T['translating']} {translation_language}..."):
-                        response = client.responses.create(
-                            model="gpt-5",
-                            input=f"""
-Translate the following business analysis into {translation_language}.
-Keep the meaning clear, professional, and easy to understand.
+def generate_translation(text: str, target_language: str) -> str:
+    prompt = f"""
+Translate the text below into {target_language}.
+Keep the meaning accurate, business-friendly, and easy to understand.
 
 Text:
-{st.session_state.result}
+{text}
 """
-                        )
-                        st.session_state.translated_result = response.output_text
+    return call_openai(prompt)
 
-            if st.session_state.translated_result:
-                st.markdown(f"### {T['translated_results']} ({translation_language})")
-                st.write(st.session_state.translated_result)
 
-                st.download_button(
-                    label=f"{T['download_translation']} ({translation_language})",
-                    data=st.session_state.translated_result,
-                    file_name="translated_insights.txt",
-                    mime="text/plain"
-                )
-
-            st.markdown("</div>", unsafe_allow_html=True)
-
-        with tab6:
-            st.markdown(f"""
-            <div class="section-wrap">
-                <div class="section-title">{T["export_tab"]}</div>
-                <div class="section-subtle">{T["ask_export_title"]}</div>
-            """, unsafe_allow_html=True)
-
-            st.subheader(T["ask_export_title"])
-            st.write(T["ask_export_text"])
-
-            user_question = st.text_input(T["question_placeholder"])
-
-            if user_question:
-                with st.spinner(T["thinking"]):
-                    context = build_data_summary(df, mode, raw_text)
-
-                    response = client.responses.create(
-                        model="gpt-5",
-                        input=f"""
+def answer_followup_question(
+    df: pd.DataFrame,
+    mode: str,
+    raw_text: str,
+    question: str,
+    language: str,
+) -> str:
+    prompt = f"""
 Respond in {language}.
-
 You are a helpful data analyst.
+Use only the information supported by the summary below.
 
-Here is the uploaded content summary:
-{context}
+Summary:
+{build_data_summary(df, mode, raw_text)}
 
 User question:
-{user_question}
-
-Answer clearly, simply, and directly.
+{question}
 """
-                    )
+    return call_openai(prompt)
 
-                    st.session_state.chat_answer = response.output_text
 
-            if st.session_state.chat_answer:
-                st.markdown(f"### {T['answer']}")
-                st.write(st.session_state.chat_answer)
+def build_ai_data_doctor_report(
+    df: pd.DataFrame,
+    mode: str,
+    raw_text: str,
+    language: str,
+) -> str:
+    issues: List[str] = []
+    recommendations: List[str] = []
 
-            st.markdown("---")
-            st.subheader(T["export_results"])
+    missing_total = int(df.isna().sum().sum())
+    dup_total = int(df.duplicated().sum())
+    if missing_total > 0:
+        issues.append(f"Missing values detected: {missing_total}")
+        recommendations.append(
+            "Fill missing numeric values with median or business-approved defaults."
+        )
+        recommendations.append(
+            "Fill missing text fields with explicit placeholders like 'Unknown' only when appropriate."
+        )
+    if dup_total > 0:
+        issues.append(f"Duplicate rows detected: {dup_total}")
+        recommendations.append(
+            "Review duplicate rows before deletion to separate true duplicates from repeated business events."
+        )
 
-            csv_data = df.to_csv(index=False).encode("utf-8")
-            st.download_button(
-                label=T["download_csv"],
-                data=csv_data,
-                file_name="processed_data.csv",
-                mime="text/csv"
+    numeric_cols = df.select_dtypes(include="number").columns.tolist()
+    outlier_notes = []
+    for col in numeric_cols[:8]:
+        series = pd.to_numeric(df[col], errors="coerce").dropna()
+        if len(series) < 8:
+            continue
+        q1 = series.quantile(0.25)
+        q3 = series.quantile(0.75)
+        iqr = q3 - q1
+        if iqr <= 0:
+            continue
+        mask = (series < q1 - 1.5 * iqr) | (series > q3 + 1.5 * iqr)
+        count = int(mask.sum())
+        if count:
+            outlier_notes.append(f"{col}: {count} possible outliers")
+
+    if outlier_notes:
+        issues.append("Possible outliers detected: " + "; ".join(outlier_notes))
+        recommendations.append(
+            "Inspect outliers to separate real signals from data entry errors."
+        )
+
+    constant_cols = [c for c in df.columns if df[c].nunique(dropna=False) <= 1]
+    if constant_cols:
+        issues.append("Constant columns detected: " + ", ".join(constant_cols[:15]))
+        recommendations.append(
+            "Review constant columns. They may be placeholders, IDs gone wrong, or fields with no analytical value."
+        )
+
+    if not issues:
+        issues.append("No major structural issues detected.")
+        recommendations.append(
+            "Proceed with analysis while validating business context."
+        )
+
+    local_report = (
+        "AI Data Doctor Findings\n"
+        "-----------------------\n"
+        + "\n".join(f"- {item}" for item in issues)
+        + "\n\nRecommended Fixes\n"
+        "-----------------\n"
+        + "\n".join(f"- {item}" for item in recommendations)
+    )
+
+    if not ai_available():
+        return local_report
+
+    prompt = f"""
+Respond in {language}.
+You are a professional data quality consultant.
+Turn the findings below into a polished diagnostic report.
+
+Findings:
+{local_report}
+
+Dataset summary:
+{build_data_summary(df, mode, raw_text)}
+"""
+    return call_openai(prompt)
+
+
+def generate_cleaning_summary(
+    original_df: pd.DataFrame,
+    cleaned_df: pd.DataFrame,
+    language: str = "English",
+) -> str:
+    if original_df is None or cleaned_df is None:
+        return ""
+    before_missing = int(original_df.isnull().sum().sum())
+    after_missing = int(cleaned_df.isnull().sum().sum())
+    duplicates_before = int(original_df.duplicated().sum())
+    duplicates_after = int(cleaned_df.duplicated().sum())
+
+    if not ai_available():
+        return (
+            f"Missing values: {before_missing} → {after_missing}. "
+            f"Duplicate rows: {duplicates_before} → {duplicates_after}. "
+            f"The cleaning steps improved dataset quality for analysis."
+        )
+
+    prompt = f"""
+Respond in {language}.
+
+You are a data cleaning expert.
+
+Write a short professional summary (3 lines max) explaining:
+- what cleaning actions were applied
+- why they matter
+- how they improve data quality
+
+Before cleaning:
+Missing values: {before_missing}
+Duplicate rows: {duplicates_before}
+
+After cleaning:
+Missing values: {after_missing}
+Duplicate rows: {duplicates_after}
+"""
+    return call_openai(prompt)
+
+
+# =========================================================
+# FORECASTING
+# =========================================================
+def prepare_forecast_dataframe(
+    df: pd.DataFrame,
+    date_col: str,
+    value_col: str,
+) -> pd.DataFrame:
+    working = df[[date_col, value_col]].copy()
+    working[date_col] = pd.to_datetime(working[date_col], errors="coerce")
+    working[value_col] = pd.to_numeric(working[value_col], errors="coerce")
+    working = working.dropna()
+    if working.empty:
+        return working
+    working = (
+        working.groupby(date_col, as_index=False)[value_col]
+        .sum()
+        .sort_values(date_col)
+    )
+    return working
+
+
+def build_forecast_ml(
+    grouped_df: pd.DataFrame,
+    periods: int = 6,
+) -> Tuple[pd.DataFrame, str, str]:
+    if grouped_df.empty or len(grouped_df) < 3:
+        return pd.DataFrame(), "Not enough data", ""
+
+    work = grouped_df.copy().reset_index(drop=True)
+    work["time_idx"] = np.arange(len(work))
+
+    X = work[["time_idx"]]
+    y = work.iloc[:, 1]
+    model = LinearRegression()
+    model.fit(X, y)
+
+    future_idx = np.arange(len(work), len(work) + periods)
+    future_dates = pd.date_range(
+        start=work.iloc[-1, 0],
+        periods=periods + 1,
+        freq="MS",
+    )[1:]
+    preds = model.predict(pd.DataFrame({"time_idx": future_idx}))
+
+    residuals = y - model.predict(X)
+    band = float(np.std(residuals)) if len(residuals) > 1 else 0.0
+
+    forecast_df = pd.DataFrame(
+        {
+            "Date": future_dates,
+            "Forecast": preds,
+            "Lower_Bound": preds - band,
+            "Upper_Bound": preds + band,
+        }
+    )
+
+    explanation = (
+        "Linear trend forecast generated from the historical pattern in the selected metric."
+    )
+    return forecast_df, "Forecast model: LinearRegression", explanation
+
+
+def generate_forecast_interpretation(
+    forecast_df: pd.DataFrame,
+    metric_name: str,
+    language: str = "English",
+) -> str:
+    if forecast_df.empty:
+        return ""
+    first_pred = float(forecast_df["Forecast"].iloc[0])
+    last_pred = float(forecast_df["Forecast"].iloc[-1])
+    trend = "stable"
+    if last_pred > first_pred:
+        trend = "upward"
+    elif last_pred < first_pred:
+        trend = "downward"
+    return (
+        f"The forecast for {metric_name} shows a {trend} direction over the selected horizon.\n"
+        f"This helps you anticipate likely business movement if recent patterns continue.\n"
+        f"Use it as a planning signal for budget, staffing, inventory, or operations."
+    )
+
+
+def generate_forecast_recommendation(
+    forecast_df: pd.DataFrame,
+    metric_name: str,
+    language: str = "English",
+) -> str:
+    if forecast_df.empty:
+        return ""
+    return (
+        f"Monitor {metric_name} closely, review the projected direction, "
+        f"and align planning decisions with the forecast trend."
+    )
+
+
+# =========================================================
+# CLEANING / COMPARE / PDF
+# =========================================================
+def compare_dataframes(df_a: pd.DataFrame, df_b: pd.DataFrame) -> str:
+    lines = [
+        "Comparison Summary",
+        "------------------",
+        f"File A shape: {df_a.shape[0]} rows × {df_a.shape[1]} columns",
+        f"File B shape: {df_b.shape[0]} rows × {df_b.shape[1]} columns",
+        f"Row difference: {df_b.shape[0] - df_a.shape[0]}",
+        f"Column difference: {df_b.shape[1] - df_a.shape[1]}",
+    ]
+    shared_numeric = sorted(
+        set(df_a.select_dtypes(include="number").columns).intersection(
+            df_b.select_dtypes(include="number").columns
+        )
+    )
+    if shared_numeric:
+        lines.append("")
+        lines.append("Shared Numeric Column Changes:")
+        for col in shared_numeric[:10]:
+            a_mean = pd.to_numeric(df_a[col], errors="coerce").mean()
+            b_mean = pd.to_numeric(df_b[col], errors="coerce").mean()
+            lines.append(
+                f"- {col}: mean {a_mean:.2f} → {b_mean:.2f} (Δ {b_mean - a_mean:.2f})"
+            )
+    else:
+        lines.append("")
+        lines.append("No shared numeric columns found for comparison.")
+    return "\n".join(lines)
+
+
+def apply_cleaning_actions(
+    df: pd.DataFrame,
+    remove_dup: bool,
+    fill_num: bool,
+    fill_text: bool,
+    trim_spaces: bool,
+    standardize_dates_flag: bool,
+) -> pd.DataFrame:
+    cleaned = df.copy()
+    if remove_dup:
+        cleaned = cleaned.drop_duplicates()
+    if fill_num:
+        for col in cleaned.select_dtypes(include="number").columns:
+            cleaned[col] = cleaned[col].fillna(cleaned[col].median())
+    if fill_text:
+        for col in cleaned.select_dtypes(include=["object", "category"]).columns:
+            cleaned[col] = cleaned[col].fillna("Unknown")
+    if trim_spaces:
+        for col in cleaned.select_dtypes(include=["object", "category"]).columns:
+            cleaned[col] = cleaned[col].astype(str).str.strip()
+    if standardize_dates_flag:
+        for col in cleaned.columns:
+            if "date" in str(col).lower():
+                cleaned[col] = pd.to_datetime(cleaned[col], errors="coerce")
+    return cleaned
+
+
+def generate_pdf_report(text: str, filename: str = "executive_report.pdf") -> str:
+    out_path = BASE_DIR / filename
+    doc = SimpleDocTemplate(str(out_path), pagesize=letter)
+    styles = getSampleStyleSheet()
+    story = []
+    for paragraph in str(text).split("\n\n"):
+        story.append(
+            Paragraph(
+                html.escape(paragraph).replace("\n", "<br/>"),
+                styles["Normal"],
+            )
+        )
+        story.append(Spacer(1, 12))
+    doc.build(story)
+    return str(out_path)
+
+
+# =========================================================
+# SAVING / SHARING
+# =========================================================
+def report_payload(
+    file_name: str,
+    analysis: str,
+    translation: str = "",
+    answer: str = "",
+    doctor: str = "",
+) -> dict:
+    return {
+        "report_id": uuid.uuid4().hex[:14],
+        "file_name": file_name,
+        "analysis": analysis,
+        "translation": translation,
+        "answer": answer,
+        "doctor": doctor,
+        "created_at": now_iso(),
+    }
+
+
+def save_report_for_user(email: str, payload: dict) -> Optional[Path]:
+    if not email or not payload:
+        return None
+    out_path = user_report_dir(email) / f"{payload['report_id']}.json"
+    try:
+        out_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return out_path
+    except Exception:
+        return None
+
+
+def load_user_reports(email: str) -> List[dict]:
+    if not email:
+        return []
+    folder = user_report_dir(email)
+    results = []
+    for path in sorted(folder.glob("*.json"), reverse=True):
+        try:
+            results.append(json.loads(path.read_text(encoding="utf-8")))
+        except Exception:
+            continue
+    return results
+
+
+def create_shareable_report_link(
+    email: str,
+    file_name: str,
+    analysis: str,
+    translation: str = "",
+    doctor: str = "",
+) -> str:
+    share_id = uuid.uuid4().hex[:16]
+    payload = {
+        "share_id": share_id,
+        "file_name": file_name,
+        "analysis": analysis,
+        "translation": translation,
+        "doctor": doctor,
+        "shared_by": email,
+        "created_at": now_iso(),
+    }
+    out_path = SHARED_REPORTS_DIR / f"{share_id}.json"
+    out_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    if APP_BASE_URL:
+        return f"{APP_BASE_URL}?share={share_id}"
+    return f"?share={share_id}"
+
+
+# =========================================================
+# SAMPLE DATA
+# =========================================================
+def sample_dataset() -> pd.DataFrame:
+    dates = pd.date_range("2025-01-01", periods=12, freq="MS")
+    return pd.DataFrame(
+        {
+            "Date": dates,
+            "Sales": [
+                12000,
+                13200,
+                12800,
+                14100,
+                15500,
+                16200,
+                17000,
+                16800,
+                17600,
+                18300,
+                19100,
+                20500,
+            ],
+            "Customers": [
+                210,
+                225,
+                218,
+                233,
+                248,
+                255,
+                270,
+                266,
+                278,
+                286,
+                294,
+                310,
+            ],
+            "Returns": [11, 14, 12, 16, 15, 17, 18, 16, 19, 20, 22, 21],
+            "Region": ["South"] * 12,
+        }
+    )
+
+
+# =========================================================
+# WORLD-CLASS BUSINESS INTELLIGENCE ADD-ONS
+# =========================================================
+def compute_data_quality_score(df: pd.DataFrame) -> Tuple[int, list]:
+    """Simple executive-grade quality score for fast decision confidence."""
+    if df is None or df.empty:
+        return 0, ["No data loaded."]
+
+    rows = max(len(df), 1)
+    cells = max(df.shape[0] * max(df.shape[1], 1), 1)
+    missing_rate = float(df.isna().sum().sum()) / cells
+    duplicate_rate = float(df.duplicated().sum()) / rows
+    constant_cols = [c for c in df.columns if df[c].nunique(dropna=False) <= 1]
+
+    score = 100
+    score -= min(35, int(missing_rate * 100))
+    score -= min(25, int(duplicate_rate * 100))
+    score -= min(20, len(constant_cols) * 4)
+    score = max(0, min(100, score))
+
+    notes = []
+    if missing_rate > 0:
+        notes.append(f"Missing values affect {missing_rate:.1%} of cells.")
+    if duplicate_rate > 0:
+        notes.append(f"Duplicate rows affect {duplicate_rate:.1%} of records.")
+    if constant_cols:
+        notes.append("Constant columns detected: " + ", ".join(map(str, constant_cols[:8])))
+    if not notes:
+        notes.append("Dataset looks structurally healthy for first-pass analysis.")
+    return score, notes
+
+
+def render_executive_command_center(df: pd.DataFrame) -> None:
+    """Indispensable industry layer: instant health, readiness, and decision cues."""
+    if df is None:
+        return
+
+    score, notes = compute_data_quality_score(df)
+    numeric_cols = df.select_dtypes(include="number").columns.tolist()
+    text_cols = df.select_dtypes(include=["object", "category"]).columns.tolist()
+    date_like_cols = [c for c in df.columns if "date" in str(c).lower() or "time" in str(c).lower()]
+
+    st.markdown("### 🌍 Executive Command Center")
+    q1, q2, q3, q4 = st.columns(4)
+    q1.metric("Data Quality Score", f"{score}/100")
+    q2.metric("Numeric Fields", len(numeric_cols))
+    q3.metric("Text Fields", len(text_cols))
+    q4.metric("Date/Time Fields", len(date_like_cols))
+
+    with st.expander("Decision Readiness Notes", expanded=True):
+        for note in notes:
+            st.write(f"• {note}")
+        if score >= 85:
+            st.success("This dataset is ready for executive reporting, forecasting, and AI analysis.")
+        elif score >= 65:
+            st.warning("This dataset is usable, but cleaning is recommended before major business decisions.")
+        else:
+            st.error("This dataset needs cleaning before it should drive important decisions.")
+
+def generate_executive_dashboard(df: pd.DataFrame):
+    if df is None or df.empty:
+        return None
+
+    metrics = compute_semantic_metrics(df)
+
+    summary = {
+        "rows": df.shape[0],
+        "columns": df.shape[1],
+        "missing": int(df.isna().sum().sum()),
+        "duplicates": int(df.duplicated().sum())
+    }
+
+    insights = []
+
+    if summary["missing"] > 0:
+        insights.append("Dataset contains missing values that may affect accuracy.")
+
+    if summary["duplicates"] > 0:
+        insights.append("Duplicate records detected. Consider cleaning before analysis.")
+
+    if not insights:
+        insights.append("Dataset is clean and ready for analysis.")
+
+    return metrics, summary, insights
+
+def auto_fix_dataset(df: pd.DataFrame) -> Tuple[pd.DataFrame, list]:
+    fixed = df.copy()
+    actions = []
+
+    before_rows = len(fixed)
+
+    fixed = fixed.drop_duplicates()
+    removed_duplicates = before_rows - len(fixed)
+
+    if removed_duplicates > 0:
+        actions.append(f"Removed {removed_duplicates} duplicate rows.")
+
+    for col in fixed.select_dtypes(include="number").columns:
+        missing_before = fixed[col].isna().sum()
+        if missing_before > 0:
+            fixed[col] = fixed[col].fillna(fixed[col].median())
+            actions.append(f"Filled missing numeric values in '{col}' with median.")
+
+    for col in fixed.select_dtypes(include=["object", "category"]).columns:
+        missing_before = fixed[col].isna().sum()
+        if missing_before > 0:
+            fixed[col] = fixed[col].fillna("Unknown")
+            actions.append(f"Filled missing text values in '{col}' with 'Unknown'.")
+
+        fixed[col] = fixed[col].astype(str).str.strip()
+
+    for col in fixed.columns:
+        if "date" in str(col).lower() or "time" in str(col).lower():
+            try:
+                fixed[col] = pd.to_datetime(fixed[col], errors="coerce")
+                actions.append(f"Standardized date/time column '{col}'.")
+            except Exception:
+                pass
+
+    if not actions:
+        actions.append("No major cleaning issues found. Dataset already looks clean.")
+
+    return fixed, actions
+
+def generate_decision_engine_report(
+    df: pd.DataFrame,
+    mode: str,
+    raw_text: str,
+    language: str = "English",
+) -> str:
+    if df is None or df.empty:
+        return "No dataset loaded."
+
+    local_summary = build_data_summary(df, mode, raw_text)
+
+    if not ai_available():
+        missing_total = int(df.isna().sum().sum())
+        dup_total = int(df.duplicated().sum())
+
+        return f"""
+Decision Engine Report
+
+1. Immediate Priority
+Review dataset quality before making major decisions.
+
+2. Main Risk
+Missing values: {missing_total}
+Duplicate rows: {dup_total}
+
+3. Recommended Action
+Clean the dataset, review trends, and validate key business columns.
+
+4. Business Impact
+Better data quality improves forecasting, reporting, and decision confidence.
+"""
+
+    prompt = f"""
+Respond in {language}.
+
+You are an executive business strategist and senior data analyst.
+
+Analyze the dataset summary below and produce a decision-ready report with these sections:
+
+1. Executive Decision Summary
+2. Top 3 Business Opportunities
+3. Top 3 Risks
+4. Recommended Actions
+5. What To Do First
+6. Expected Business Impact
+7. Questions Leaders Should Ask Next
+
+Rules:
+- Be practical.
+- Do not invent facts.
+- Base recommendations only on the dataset summary.
+- Write like a boardroom advisor.
+
+Dataset summary:
+{local_summary}
+"""
+
+    return call_openai(prompt)
+
+def run_scenario_simulator(base_value: float, change_percent: float) -> dict:
+    adjusted_value = base_value * (1 + change_percent / 100)
+
+    return {
+        "base_value": base_value,
+        "change_percent": change_percent,
+        "adjusted_value": adjusted_value,
+        "difference": adjusted_value - base_value,
+    }
+    
+def get_industry_kpis(df: pd.DataFrame):
+    industry = st.session_state.get("industry_template", "General Business")
+
+    if df is None or df.empty:
+        return []
+
+    numeric_cols = df.select_dtypes(include="number").columns.tolist()
+
+    if not numeric_cols:
+        return [
+            ("Rows", df.shape[0]),
+            ("Columns", df.shape[1]),
+        ]
+
+    first_num = numeric_cols[0]
+    second_num = numeric_cols[1] if len(numeric_cols) > 1 else numeric_cols[0]
+
+    kpis = []
+
+    if industry == "Finance":
+        kpis.append(("Total Value", pd.to_numeric(df[first_num], errors="coerce").sum()))
+        kpis.append(("Average Value", pd.to_numeric(df[first_num], errors="coerce").mean()))
+        kpis.append(("Maximum Value", pd.to_numeric(df[first_num], errors="coerce").max()))
+
+    elif industry == "Marketing":
+        kpis.append(("Performance Total", pd.to_numeric(df[first_num], errors="coerce").sum()))
+        kpis.append(("Average Performance", pd.to_numeric(df[first_num], errors="coerce").mean()))
+        kpis.append(("Growth Signal", pd.to_numeric(df[second_num], errors="coerce").sum()))
+
+    elif industry == "Sales":
+        kpis.append(("Sales Signal", pd.to_numeric(df[first_num], errors="coerce").sum()))
+        kpis.append(("Average Sale Signal", pd.to_numeric(df[first_num], errors="coerce").mean()))
+        kpis.append(("Peak Value", pd.to_numeric(df[first_num], errors="coerce").max()))
+
+    elif industry == "Logistics":
+        kpis.append(("Volume Processed", pd.to_numeric(df[first_num], errors="coerce").sum()))
+        kpis.append(("Operational Average", pd.to_numeric(df[first_num], errors="coerce").mean()))
+        kpis.append(("Capacity Signal", pd.to_numeric(df[second_num], errors="coerce").sum()))
+
+    elif industry == "Healthcare":
+        kpis.append(("Activity Volume", pd.to_numeric(df[first_num], errors="coerce").sum()))
+        kpis.append(("Average Measure", pd.to_numeric(df[first_num], errors="coerce").mean()))
+
+    else:
+        kpis.append(("Rows", df.shape[0]))
+        kpis.append(("Columns", df.shape[1]))
+        kpis.append(("Missing Values", int(df.isna().sum().sum())))
+
+    return kpis
+
+def save_dashboard_snapshot(df: pd.DataFrame, file_name: str) -> Optional[Path]:
+    if df is None or df.empty:
+        return None
+
+    email = current_user_email() or "local_user"
+    folder = user_report_dir(email)
+
+    snapshot = {
+        "dashboard_id": uuid.uuid4().hex[:12],
+        "file_name": file_name,
+        "created_at": now_iso(),
+        "rows": int(df.shape[0]),
+        "columns": int(df.shape[1]),
+        "missing_values": int(df.isna().sum().sum()),
+        "duplicate_rows": int(df.duplicated().sum()),
+        "industry_template": st.session_state.get("industry_template", "General Business"),
+        "data_quality_score": compute_data_quality_score(df)[0],
+    }
+
+    out_path = folder / f"dashboard_{snapshot['dashboard_id']}.json"
+    out_path.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
+    return out_path
+
+
+def load_dashboard_snapshots() -> List[dict]:
+    email = current_user_email() or "local_user"
+    folder = user_report_dir(email)
+
+    dashboards = []
+    for path in sorted(folder.glob("dashboard_*.json"), reverse=True):
+        try:
+            dashboards.append(json.loads(path.read_text(encoding="utf-8")))
+        except Exception:
+            continue
+
+    return dashboards
+
+def generate_auto_dashboard(df: pd.DataFrame) -> dict:
+    if df is None or df.empty:
+        return {}
+
+    numeric_cols = df.select_dtypes(include="number").columns.tolist()
+
+    if not numeric_cols:
+        return {}
+
+    main_col = numeric_cols[0]
+
+    summary = {
+        "column": main_col,
+        "total": float(df[main_col].sum()),
+        "mean": float(df[main_col].mean()),
+        "max": float(df[main_col].max()),
+        "min": float(df[main_col].min()),
+    }
+
+    return summary
+
+FREE_LIMIT = 2
+
+# Compatibility wrappers kept here so the later section does not erase the premium logic above.
+def get_user_plan():
+    email = current_user_email()
+    if st.session_state.get("developer_premium_override"):
+        return PREMIUM_PLAN
+    if email and email in PREMIUM_USERS:
+        return PREMIUM_PLAN
+    if st.session_state.get("premium_status") == "premium":
+        return PREMIUM_PLAN
+    if st.session_state.get("user_plan") == PREMIUM_PLAN:
+        return PREMIUM_PLAN
+    return FREE_PLAN
+
+def set_user_plan(plan):
+    st.session_state["user_plan"] = plan
+    st.session_state["premium_status"] = "premium" if plan == PREMIUM_PLAN else "inactive"
+
+def is_premium():
+    return get_user_plan() == PREMIUM_PLAN
+# =========================================================
+# MAIN
+# =========================================================
+def render_how_it_works() -> None:
+    st.markdown(
+        """
+        <div class="how-card">
+            <div class="how-title">How it works</div>
+            <div class="how-text">
+                1. Upload your file (CSV, Excel, PDF, image, or ZIP)<br/>
+                2. Review overview, charts, and quick dashboard<br/>
+                3. Generate AI-powered analysis and diagnostics<br/>
+                4. Ask follow-up questions and export results<br/>
+                5. Save, share, or upgrade for premium features
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+def main() -> None:
+    init_state()
+    inject_global_css()
+    process_stripe_return()
+
+    if not st.session_state.get("app_language"):
+        st.session_state["app_language"] = detect_user_language()
+
+    render_top_bar()
+    render_hero()
+    render_feature_pills()
+    render_trust_bar()
+    render_status_strip()
+    st.markdown('<hr class="green-gradient-divider">', unsafe_allow_html=True)
+
+    with st.sidebar:
+        plan = "Premium" if is_premium_user() else "Free Plan"
+        st.markdown(
+            f"""
+            <div style="
+                margin:8px 0 14px;
+                padding:12px 14px;
+                border-radius:12px;
+                background:#fef3c7;
+                color:#92400e;
+                font-weight:700;
+                border:1px solid rgba(0,0,0,0.08);
+            ">
+                Current Plan: {plan}
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        
+        lang_names = list(LANGUAGES.keys())
+        
+        sorted_langs = ["English"] + sorted(
+            [lang for lang in lang_names if lang != "English"],
+            key=lambda x: x.lower(),
+        )
+
+        selected_lang = st.selectbox(
+            "🌍 Language",
+            sorted_langs,
+            index=sorted_langs.index(st.session_state.get("app_language", "English")),
+            key="language_selectbox",
+        )
+        
+        st.session_state["app_language"] = selected_lang
+        
+        # 👇 ADD IT RIGHT HERE
+        industry_template = st.selectbox(
+            "🏢 Industry Template",
+            [
+                "General Business",
+                "Finance",
+                "Marketing",
+                "Sales",
+                "Healthcare",
+                "Logistics",
+                "Education",
+                "Retail",
+                "Operations",
+            ],
+            key="industry_template",
+        )
+        
+        st.markdown(
+            """
+            <div style="
+                color:#ffffff;
+                font-size:1.15rem;
+                font-weight:900;
+                margin:14px 0 8px 0;
+            ">
+                🔐 Account Access
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+                    
+        if not st.session_state.get("authenticated"):
+            email = st.text_input(t("email"), placeholder=t("email_placeholder"), key="sidebar_email")
+            password = st.text_input(t("password"), placeholder=t("password_placeholder"), type="password", key="sidebar_password")
+
+            login_col, create_col = st.columns(2)
+            with login_col:
+                if st.button(t("login"), key="login_btn", use_container_width=True):
+                    ok, msg = local_login(email, password)
+                    render_message(msg, "success" if ok else "warning")
+                    if ok:
+                        st.rerun()
+            with create_col:
+                if st.button(t("create"), key="create_btn", use_container_width=True):
+                    ok, msg = local_create_account(email, password)
+                    render_message(msg, "success" if ok else "warning")
+                    if ok:
+                        st.rerun()
+
+            if st.button("Developer Sign In", key="dev_signin_btn", use_container_width=True):
+                st.session_state["authenticated"] = True
+                st.session_state["auth_user"] = {"email": "developer@explainmydata.ai"}
+                st.session_state["developer_premium_override"] = True
+                st.session_state["premium_status"] = "premium"
+                st.session_state["user_plan"] = "premium"
+                st.rerun()
+        else:
+            st.success(f"Signed in as {current_user_email()}")
+            st.checkbox("Developer Premium Override", key="developer_premium_override")
+            if st.button(t("logout"), key="logout_btn", use_container_width=True):
+                logout()
+                st.rerun()
+
+        if st.button(t("use_sample_dataset"), key="sample_btn", use_container_width=True):
+            st.session_state["use_sample_data"] = True
+
+        st.checkbox("I agree to the data handling terms for AI analysis", key="gdpr_consent")
+        remaining = max(0, FREE_ANALYSIS_LIMIT - st.session_state.get("usage_count", 0))
+        st.caption(f"Free analyses remaining: {remaining}")
+
+        st.markdown("---")
+        
+        st.markdown("### 💎 Upgrade Your Experience")
+        st.caption("Unlock advanced AI insights, reports, and decision tools.")
+
+        if STRIPE_MONTHLY_LINK:
+            st.link_button("💎 Premium", STRIPE_MONTHLY_LINK, use_container_width=True)
+
+        if STRIPE_ONE_TIME_LINK:
+            st.link_button("💳 One-Time", STRIPE_ONE_TIME_LINK, use_container_width=True)
+
+                
+    uploaded_file = st.file_uploader(t("upload_title"), type=SUPPORTED_UPLOADS, help=t("upload_subtle"), key="main_uploader")
+
+
+    df = None
+    mode = st.session_state.get("data_mode", "structured")
+    raw_text = st.session_state.get("raw_text", "")
+    loaded_file_name = st.session_state.get("loaded_filename", "")
+
+    if st.session_state.get("use_sample_data"):
+        df = sample_dataset()
+        mode = "structured"
+        raw_text = ""
+        loaded_file_name = "sample_dataset.csv"
+        st.session_state["data_mode"] = mode
+        st.session_state["raw_text"] = raw_text
+        st.session_state["loaded_filename"] = loaded_file_name
+
+    if uploaded_file is not None:
+        ok, msg = file_size_ok(uploaded_file)
+        if not ok:
+            render_message(msg, "error")
+        else:
+            try:
+                df, mode, raw_text = parse_uploaded_file(uploaded_file)
+                loaded_file_name = uploaded_file.name
+                st.session_state["data_mode"] = mode
+                st.session_state["raw_text"] = raw_text
+                st.session_state["loaded_filename"] = loaded_file_name
+                st.session_state["use_sample_data"] = False
+                if st.session_state.get("authenticated"):
+                    save_uploaded_file_for_user(current_user_email(), uploaded_file)
+            except Exception as exc:
+                render_message(f"Upload parse error: {exc}", "error")
+                df = None
+
+    control_col, _ = st.columns([1, 8])
+    with control_col:
+        if st.button("⚙️ Control Panel", key="control_btn"):
+            st.session_state["show_controls"] = not st.session_state.get("show_controls", False)
+
+    if st.session_state.get("show_controls"):
+        st.markdown("### ⚙️ Control Panel")
+        st.write("Plan:", get_user_plan())
+        st.write("AI configured:", "Yes" if ai_available() else "No")
+        st.write("Auth configured:", "Yes" if auth_configured() else "No")
+        st.slider("Usage Count", 0, 10, key="usage_count")
+
+    tabs = st.tabs([
+        f"📊 {t('dashboard')}", "🤖 AI Dashboard", f"🧠 {t('data_doctor')}", f"🧭 {t('decision_engine')}", f"🧪 {t('scenario_simulator')}", f"💬 {t('ask_data')}",
+        f"📋 {t('report')}", f"📈 {t('forecast')}", f"📂 {t('saved')}", f"🖼️ {t('dashboard_gallery')}",
+        f"👤 {t('account')}", f"🖼️ {t('ocr')}", f"🔄 {t('compare')}",
+        f"🧹 {t('cleaning')}", f"⚖️ {t('legal')}", 
+    ])
+
+    with tabs[0]:
+        if df is None:
+            render_message("Upload a dataset or click Use Sample Dataset to get started.", "info")
+        else:
+            st.subheader("Data Overview")
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric(t("rows"), f"{len(df):,}")
+            c2.metric(t("columns"), f"{len(df.columns):,}")
+            c3.metric(t("missing"), f"{int(df.isna().sum().sum()):,}")
+            c4.metric(t("duplicates"), f"{int(df.duplicated().sum()):,}")
+            render_semantic_metric_cards(compute_semantic_metrics(df))
+            render_executive_command_center(df)
+            
+            st.markdown("### Preview")
+            
+            st.markdown("### 📊 Industry KPIs")
+            
+            if df is not None:
+                kpis = get_industry_kpis(df)
+
+            if not kpis:
+                render_message(
+                    "No industry KPIs available for this dataset. Try another industry template or upload data with numeric columns.",
+                    "warning",
+                )
+            else:
+                cols = st.columns(len(kpis))
+
+                for i, (label, value) in enumerate(kpis):
+                    try:
+                        cols[i].metric(label, f"{value:,.2f}")
+                    except Exception:
+                        cols[i].metric(label, str(value))
+                
+            st.markdown("### 📊 Industry KPIs")
+            
+            if df is not None:
+                kpis = get_industry_kpis(df)
+
+                cols = st.columns(len(kpis))
+
+                for i, (label, value) in enumerate(kpis):
+                    try:
+                        cols[i].metric(label, f"{value:,.2f}")
+                    except:
+                        cols[i].metric(label, str(value))
+            
+            st.markdown("### 📈 Industry Trend")
+
+            numeric_cols = df.select_dtypes(include="number").columns.tolist()
+
+            if numeric_cols:
+                col_choice = numeric_cols[0]
+
+                fig, ax = plt.subplots()
+                ax.plot(df[col_choice].fillna(0))
+                ax.set_title(f"{col_choice} Trend")
+
+                st.pyplot(fig)
+            
+            st.markdown("### 📈 Executive Dashboard")
+
+            if df is not None:
+                if st.button("📈 Generate Executive Dashboard", key="exec_dashboard_btn"):
+                    metrics, summary, insights = generate_executive_dashboard(df)
+
+                    col1, col2, col3, col4 = st.columns(4)
+
+                    col1.metric("Rows", summary["rows"])
+                    col2.metric("Columns", summary["columns"])
+                    col3.metric("Missing", summary["missing"])
+                    col4.metric("Duplicates", summary["duplicates"])
+
+                    st.markdown("#### 📊 Key Metrics")
+                    render_semantic_metric_cards(metrics)
+
+                    st.markdown("#### 🧠 Insights")
+                    for item in insights:
+                        st.write(f"• {item}")
+            
+            st.dataframe(df.head(50), use_container_width=True)
+            numeric_cols = df.select_dtypes(include="number").columns.tolist()
+            if numeric_cols:
+                chart_col = st.selectbox("Quick chart metric", numeric_cols, key="dashboard_chart_col")
+                fig, ax = plt.subplots()
+                pd.to_numeric(df[chart_col], errors="coerce").dropna().plot(kind="hist", ax=ax)
+                ax.set_title(f"Distribution of {chart_col}")
+                ax.set_xlabel(chart_col)
+                st.pyplot(fig)
+
+    with tabs[1]:
+        st.markdown("### 🤖 AI Auto Dashboard")
+
+        if df is None:
+            render_message("Upload a dataset first.", "info")
+        else:
+            if st.button("🤖 Build My Dashboard", key="auto_dashboard_btn"):
+
+                result = generate_auto_dashboard(df)
+
+                if not result:
+                    render_message("Not enough numeric data for dashboard.", "warning")
+                else:
+                    st.markdown("#### 📊 AI Selected Metrics")
+
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.metric("Total", f"{result['total']:,.2f}")
+                    c2.metric("Average", f"{result['mean']:,.2f}")
+                    c3.metric("Max", f"{result['max']:,.2f}")
+                    c4.metric("Min", f"{result['min']:,.2f}")
+
+                    st.markdown("#### 📈 AI Trend")
+
+                    fig, ax = plt.subplots()
+                    ax.plot(df[result["column"]].fillna(0))
+                    ax.set_title(f"{result['column']} Trend (AI Selected)")
+                    st.pyplot(fig)
+    
+    with tabs[2]:
+        st.subheader("AI Data Doctor")
+        if df is None:
+            render_message("Upload data first so the Data Doctor can inspect it.", "info")
+        else:
+            if st.button(t("run_ai_data_doctor"), key="doctor_btn"):
+                st.session_state["doctor_result"] = build_ai_data_doctor_report(df, mode, raw_text, current_language())
+            if st.session_state.get("doctor_result"):
+                render_report_card("Data Doctor Report", st.session_state["doctor_result"], "#facc15")
+
+        st.markdown("### 🩺 Auto-Fix Data Doctor")
+
+        if df is None:
+            render_message("Upload a dataset first.", "info")
+        else:
+            if st.button(f"🛠 {t('auto_fix_dataset')}", key="auto_fix_btn"):
+                cleaned_df, actions = auto_fix_dataset(df)
+                st.session_state["cleaned_df"] = cleaned_df
+
+                render_message("Dataset cleaned successfully.", "success")
+
+                st.markdown("#### Fixes Applied")
+                for action in actions:
+                    st.write(f"• {action}")
+
+                st.markdown("#### Cleaned Dataset Preview")
+                st.dataframe(cleaned_df.head(20), use_container_width=True)
+
+                csv_data = cleaned_df.to_csv(index=False).encode("utf-8")
+
+                st.download_button(
+                    "⬇️ Download Cleaned CSV",
+                    csv_data,
+                    file_name="cleaned_dataset.csv",
+                    mime="text/csv",
+                    key="download_cleaned_csv_btn",
+                )
+
+    with tabs[3]:
+        st.markdown("### 🧭 AI Decision Engine")
+
+        if df is None:
+            render_message("Upload a dataset first.", "info")
+        else:
+            st.write(
+                "This feature turns your dataset into executive decisions, risks, opportunities, and recommended actions."
             )
 
-            if st.session_state.result:
-                pdf_bytes = create_pdf_report(st.session_state.result)
-                st.download_button(
-                    label=T["download_pdf"],
-                    data=pdf_bytes,
-                    file_name="ExplainMyData_Report.pdf",
-                    mime="application/pdf"
+            if st.button("🧭 Generate Decision Report", key="decision_engine_btn"):
+                if require_feature("ai_insights", "Decision Engine"):
+                    decision_report = generate_decision_engine_report(
+                        df, mode, raw_text, current_language()
+                    )
+                    try:
+                        decision_report = generate_decision_engine_report(
+                            df,
+                            mode,
+                            raw_text,
+                            current_language(),
+                        )
+                        st.session_state["decision_report"] = decision_report
+                        render_report_card("AI Decision Engine Report", decision_report, "#22c55e")
+                    except Exception as exc:
+                        render_message(f"Decision Engine error: {exc}", "error")
+
+                if st.session_state.get("decision_report"):
+                    st.download_button(
+                        "⬇️ Download Decision Report",
+                        st.session_state["decision_report"],
+                        file_name="decision_engine_report.txt",
+                        mime="text/plain",
+                        key="download_decision_report_btn",
+                    )
+    
+    with tabs[4]:
+        st.markdown("### 🧪 Scenario Simulator")
+
+        if df is None:
+            render_message("Upload a dataset first.", "info")
+        else:
+            numeric_cols = df.select_dtypes(include="number").columns.tolist()
+
+            if not numeric_cols:
+                render_message("No numeric columns available for simulation.", "warning")
+            else:
+                selected_metric = st.selectbox(
+                    "Choose a numeric column to simulate",
+                    numeric_cols,
+                    key="scenario_metric_select",
                 )
 
-            if st.session_state.translated_result:
-                st.download_button(
-                    label=T["download_translated"],
-                    data=st.session_state.translated_result,
-                    file_name="translated_insights.txt",
-                    mime="text/plain"
+                base_value = float(pd.to_numeric(df[selected_metric], errors="coerce").sum())
+
+                change_percent = st.slider(
+                    "What-if change (%)",
+                    -100.0,
+                    100.0,
+                    10.0,
+                    step=1.0,
+                    key="scenario_change_slider",
                 )
 
-            st.markdown("---")
-            st.markdown(f"### {T['premium_title']}")
-            st.write(T["premium_text"])
+                result = run_scenario_simulator(base_value, change_percent)
 
-            premium_url = "PASTE_YOUR_STRIPE_LINK_HERE"
-            st.link_button(T["premium_button"], premium_url)
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Current Total", f"{result['base_value']:,.2f}")
+                c2.metric("Change", f"{result['change_percent']}%")
+                c3.metric("Projected Total", f"{result['adjusted_value']:,.2f}")
+                c4.metric("Difference", f"{result['difference']:,.2f}")
 
-            st.markdown(f"### {T['next_steps']}")
-            st.write(T["next_1"])
-            st.write(T["next_2"])
-            st.write(T["next_3"])
-            st.write(T["next_4"])
-            st.write(T["next_5"])
+                st.markdown("#### Business Meaning")
+                if result["difference"] > 0:
+                    st.success("This scenario shows a positive projected movement.")
+                elif result["difference"] < 0:
+                    st.warning("This scenario shows a negative projected movement.")
+                else:
+                    st.info("This scenario shows no projected movement.")
+    
+    with tabs[5]:
+        st.subheader("Ask Your Data")
+        if df is None:
+            render_message("Upload data first to ask questions.", "info")
+        else:
+            question = st.text_area("Ask a question about this file", key="question_box")
+            if st.button("Ask", key="ask_btn"):
+                if not question.strip():
+                    render_message("Please type a question first.", "warning")
+                else:
+                    try:
+                        st.session_state["chat_answer"] = answer_followup_question(df, mode, raw_text, question, current_language())
+                    except Exception as exc:
+                        st.session_state["chat_answer"] = f"Could not generate answer: {exc}"
+            if st.session_state.get("chat_answer"):
+                render_report_card("Answer", st.session_state["chat_answer"], "#38bdf8")
 
-            st.markdown("</div>", unsafe_allow_html=True)
+    with tabs[6]:
+        st.subheader("Consulting Report")
+        if df is None:
+            render_message("Upload data first to create a consulting report.", "info")
+        else:
+            focus = st.selectbox(t("analysis_focus"), ["Executive summary", "Sales growth", "Operations", "Risk", "Customer behavior", "Data quality"], key="analysis_focus_select")
+            if st.button(t("generate_ai_insights"), key="insights_btn"):
+                allowed, reason = analysis_allowed()
+                if not st.session_state.get("gdpr_consent"):
+                    render_message("Please agree to the data handling terms before AI analysis.", "warning")
+                elif not allowed:
+                    render_message(reason, "warning")
+                else:
+                    try:
+                        st.session_state["result"] = generate_ai_analysis(df, mode, raw_text, focus, current_language())
+                        increment_usage()
+                    except Exception as exc:
+                        st.session_state["result"] = f"Could not generate AI report: {exc}"
+            if st.session_state.get("result"):
+                render_report_card("Executive Consulting Report", st.session_state["result"], "#22c55e")
+                pdf_path = generate_pdf_report(st.session_state["result"])
+                with open(pdf_path, "rb") as pdf_file:
+                    st.download_button(t("download_executive_report"), data=pdf_file.read(), file_name="executive_report.pdf", mime="application/pdf")
+                if st.button("Save Report", key="save_report_btn"):
+                    if not st.session_state.get("authenticated"):
+                        render_message("Please sign in before saving reports.", "warning")
+                    else:
+                        payload = report_payload(loaded_file_name, st.session_state.get("result", ""), st.session_state.get("translated_result", ""), st.session_state.get("chat_answer", ""), st.session_state.get("doctor_result", ""))
+                        saved_path = save_report_for_user(current_user_email(), payload)
+                        render_message("Report saved successfully." if saved_path else "Report could not be saved.", "success" if saved_path else "error")
+                if st.button("Create Shareable Report Link", key="share_report_btn"):
+                    if require_feature("shareable_reports", "Shareable Reports"):
+                        link = create_shareable_report_link(current_user_email(), loaded_file_name, st.session_state.get("result", ""), st.session_state.get("translated_result", ""), st.session_state.get("doctor_result", ""))
+                        st.code(link)
+    
+        st.markdown("### 🧾 Boardroom PDF Report")
 
-        st.success(T["workspace_loaded"])
+        if df is None:
+            render_message("Upload a dataset first.", "info")
+        else:
+            if st.button("🧾 Generate Boardroom PDF", key="boardroom_pdf_btn"):
+                if require_feature("saved_reports", "Boardroom PDF"):
+                    report_text = (
+                        "ExplainMyData AI - Boardroom Report\n\n"
+                        f"File: {loaded_file_name}\n"
+                        f"Rows: {df.shape[0]}\n"
+                        f"Columns: {df.shape[1]}\n"
+                        f"Missing Values: {int(df.isna().sum().sum())}\n"
+                        f"Duplicate Rows: {int(df.duplicated().sum())}\n\n"
+                        "Executive Insights\n"
+                        "------------------\n"
+                        f"{st.session_state.get('result', 'No AI insights generated yet.')}\n\n"
+                        "Data Doctor Findings\n"
+                        "--------------------\n"
+                        f"{st.session_state.get('doctor_result', 'No Data Doctor report generated yet.')}\n\n"
+                        "Decision Engine\n"
+                        "---------------\n"
+                        f"{st.session_state.get('decision_report', 'No Decision Engine report generated yet.')}\n"
+                    )
 
-    except Exception as e:
-        st.error(f"Something went wrong: {e}")
+                    pdf_path = generate_pdf_report(report_text, "boardroom_report.pdf")
 
-else:
+                    with open(pdf_path, "rb") as f:
+                        st.download_button(
+                            "⬇️ Download Boardroom PDF",
+                            f,
+                            file_name="boardroom_report.pdf",
+                            mime="application/pdf",
+                            key="download_boardroom_pdf_btn",
+                        )
+        
+        st.markdown("### 🔗 Shareable Report")
+
+        if df is None:
+            render_message("Upload a dataset first.", "info")
+        else:
+            if st.button(f"🔗 {t('create_share_link')}", key="create_share_link_btn"):
+                try:
+                    analysis_text = st.session_state.get("result", "")
+                    translation_text = st.session_state.get("translated_result", "")
+                    doctor_text = st.session_state.get("doctor_result", "")
+
+                    if not analysis_text and not doctor_text:
+                        render_message(
+                            "Generate AI insights or Data Doctor report first before sharing.",
+                            "warning",
+                        )
+                    else:
+                        share_link = create_shareable_report_link(
+                            current_user_email(),
+                            loaded_file_name,
+                            analysis_text,
+                            translation_text,
+                            doctor_text,
+                        )
+
+                        st.session_state["share_link"] = share_link
+                        render_message("Shareable report link created.", "success")
+
+                except Exception as exc:
+                    render_message(f"Share link error: {exc}", "error")
+
+            if st.session_state.get("share_link"):
+                st.markdown("#### Your Shareable Link")
+                st.code(st.session_state["share_link"])
+
+    with tabs[7]:
+        st.subheader("Forecast")
+        if df is None:
+            render_message("Upload structured data first to forecast.", "info")
+        else:
+            date_candidates = [c for c in df.columns if "date" in str(c).lower() or "time" in str(c).lower()]
+            numeric_cols = df.select_dtypes(include="number").columns.tolist()
+            if not date_candidates or not numeric_cols:
+                render_message("Forecast needs one date/time column and one numeric column.", "warning")
+            else:
+                date_col = st.selectbox("Date column", date_candidates, key="forecast_date_col")
+                value_col = st.selectbox("Value column", numeric_cols, key="forecast_value_col")
+                periods = st.slider("Forecast periods", 3, 24, 6, key="forecast_periods")
+                if st.button("Build Forecast", key="forecast_btn"):
+                    grouped = prepare_forecast_dataframe(df, date_col, value_col)
+                    forecast_df, model_name, explanation = build_forecast_ml(grouped, periods)
+                    st.session_state["forecast_df"] = forecast_df
+                    st.session_state["forecast_model_name"] = model_name
+                    st.session_state["forecast_explanation"] = explanation
+                forecast_df = st.session_state.get("forecast_df")
+                if isinstance(forecast_df, pd.DataFrame) and not forecast_df.empty:
+                    st.write(st.session_state.get("forecast_model_name", ""))
+                    st.dataframe(forecast_df, use_container_width=True)
+                    fig, ax = plt.subplots()
+                    forecast_df.plot(x="Date", y="Forecast", ax=ax)
+                    ax.set_title("Forecast")
+                    st.pyplot(fig)
+                    render_report_card("Forecast Interpretation", generate_forecast_interpretation(forecast_df, value_col, current_language()), "#a78bfa")
+                    render_report_card("Recommended Action", generate_forecast_recommendation(forecast_df, value_col, current_language()), "#22c55e")
+
+    with tabs[8]:
+        st.subheader("Saved Reports")
+        if not st.session_state.get("authenticated"):
+            render_message("Sign in to view saved reports.", "info")
+        else:
+            reports = load_user_reports(current_user_email())
+            if not reports:
+                render_message("No saved reports yet.", "info")
+            for item in reports:
+                with st.expander(f"{item.get('file_name', 'Report')} — {item.get('created_at', '')}"):
+                    if item.get("analysis"):
+                        render_report_card("Analysis", item["analysis"], "#22c55e")
+                    if item.get("doctor"):
+                        render_report_card("Data Doctor", item["doctor"], "#facc15")
+                    if item.get("answer"):
+                        render_report_card("Answer", item["answer"], "#38bdf8")
+
+    with tabs[9]:
+        st.markdown("### 🖼️ Saved Dashboard Gallery")
+
+        if df is not None:
+            if st.button("💾 Save Current Dashboard Snapshot", key="save_dashboard_snapshot_btn"):
+                path = save_dashboard_snapshot(df, loaded_file_name)
+                if path:
+                    render_message("Dashboard snapshot saved.", "success")
+                else:
+                    render_message("Could not save dashboard snapshot.", "error")
+
+        dashboards = load_dashboard_snapshots()
+
+        if not dashboards:
+            render_message("No dashboard snapshots saved yet.", "info")
+        else:
+            for item in dashboards:
+                with st.expander(f"{item.get('file_name', 'Dashboard')} — {item.get('created_at', '')}"):
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.metric("Rows", item.get("rows", 0))
+                    c2.metric("Columns", item.get("columns", 0))
+                    c3.metric("Missing", item.get("missing_values", 0))
+                    c4.metric("Quality", f"{item.get('data_quality_score', 0)}/100")
+
+                    st.write("Industry:", item.get("industry_template", "General Business"))
+    
+    with tabs[10]:
+        st.subheader("Account")
+        st.write("Authentication:", "Signed in" if st.session_state.get("authenticated") else "Not signed in")
+        st.write("Email:", current_user_email() or "Not available")
+        st.write("Plan:", get_user_plan())
+        st.write("Usage count:", st.session_state.get("usage_count", 0))
+        if st.session_state.get("authenticated"):
+            if st.button("Delete my local saved data", key="delete_account_data_btn"):
+                safe_remove_tree(user_upload_dir(current_user_email()))
+                safe_remove_tree(user_report_dir(current_user_email()))
+                render_message("Local saved files and reports were deleted.", "success")
+
+    with tabs[11]:
+        st.subheader("OCR")
+        if st.session_state.get("ocr_preview") is not None:
+            st.image(st.session_state["ocr_preview"], caption="OCR image preview", use_container_width=True)
+        if st.session_state.get("ocr_text"):
+            st.text_area("Extracted OCR text", st.session_state["ocr_text"], height=260)
+        else:
+            render_message("Upload an image file to extract OCR text.", "info")
+
+    with tabs[12]:
+        st.subheader("Compare Two Files")
+        file_a = st.file_uploader("Upload File A", type=["csv", "xlsx", "xls"], key="compare_a")
+        file_b = st.file_uploader("Upload File B", type=["csv", "xlsx", "xls"], key="compare_b")
+        if file_a is not None and file_b is not None:
+            try:
+                df_a = load_structured_data(file_a)
+                df_b = load_structured_data(file_b)
+                render_report_card("Comparison", compare_dataframes(df_a, df_b), "#38bdf8")
+            except Exception as exc:
+                render_message(f"Comparison failed: {exc}", "error")
+
+    with tabs[13]:
+        st.subheader("Cleaning Lab")
+        if df is None:
+            render_message("Upload data first to clean it.", "info")
+        else:
+            remove_dup = st.checkbox("Remove duplicate rows", value=True, key="clean_dup")
+            fill_num = st.checkbox("Fill numeric missing values with median", value=True, key="clean_num")
+            fill_text = st.checkbox("Fill text missing values with Unknown", value=True, key="clean_text")
+            trim_spaces = st.checkbox("Trim text spaces", value=True, key="clean_trim")
+            standardize_dates_flag = st.checkbox("Standardize date columns", value=False, key="clean_dates")
+            if st.button("Apply Cleaning", key="apply_cleaning_btn"):
+                cleaned = apply_cleaning_actions(df, remove_dup, fill_num, fill_text, trim_spaces, standardize_dates_flag)
+                st.session_state["cleaned_df"] = cleaned
+                st.session_state["cleaning_summary"] = generate_cleaning_summary(df, cleaned, current_language())
+            cleaned_df = st.session_state.get("cleaned_df")
+            if isinstance(cleaned_df, pd.DataFrame):
+                st.dataframe(cleaned_df.head(50), use_container_width=True)
+                if st.session_state.get("cleaning_summary"):
+                    render_report_card("Cleaning Summary", st.session_state["cleaning_summary"], "#22c55e")
+                st.download_button("Download Cleaned CSV", cleaned_df.to_csv(index=False).encode("utf-8"), file_name="cleaned_data.csv", mime="text/csv")
+
+    with tabs[14]:
+        render_privacy_policy()
+        st.markdown("---")
+        render_terms_of_service()
+        st.markdown("---")
+        render_data_handling_notice()
+
+    st.markdown('<hr class="green-gradient-divider">', unsafe_allow_html=True)
     st.markdown(
-        f'<p style="color:#fff3a3; font-weight:700; font-size:1.08rem; margin-bottom:4px;">{T["upload_begin"]}</p>',
-        unsafe_allow_html=True
+        """
+        <div class="footer-note">
+            Clean data. Clear insights. Better decisions. Built with Streamlit, Python, AI, and business-first analytics.
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
-    st.markdown(
-        f'<h3 style="color:#f3f4f6; margin-top:0; margin-bottom:4px;">{T["how_it_works"]}</h3>',
-        unsafe_allow_html=True
-    )
-    st.markdown(f'<p style="color:#e5e7eb; margin-bottom:2px;">{T["step_1"]}</p>', unsafe_allow_html=True)
-    st.markdown(f'<p style="color:#e5e7eb; margin-bottom:2px;">{T["step_2"]}</p>', unsafe_allow_html=True)
-    st.markdown(f'<p style="color:#e5e7eb; margin-bottom:2px;">{T["step_3"]}</p>', unsafe_allow_html=True)
-    st.markdown(f'<p style="color:#e5e7eb; margin-bottom:2px;">{T["step_4"]}</p>', unsafe_allow_html=True)
-    st.markdown(f'<p style="color:#e5e7eb; margin-bottom:2px;">{T["step_5"]}</p>', unsafe_allow_html=True)
+
+if __name__ == "__main__":
+    main()

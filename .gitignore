@@ -4,3 +4,35 @@ OPENAI_API_KEY=*.txt
 .streamlit/secrets.toml
 __pycache__/
 *.pyc
+# Secrets
+.env
+.streamlit/secrets.toml
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Data / Storage (VERY IMPORTANT for your app)
+app_storage/
+user_uploads/
+user_reports/
+shared_reports/
+support/
+
+# Local files
+*.log
+*.tmp
+
+# OS / IDE
+.vscode/
+.idea/
+.DS_Store
+
+# Uploaded files (your app handles these dynamically)
+*.csv
+*.xlsx
+*.pdf
+*.png
+*.jpg
