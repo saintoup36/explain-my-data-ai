@@ -778,26 +778,24 @@ def inject_global_css() -> None:
             width: 100%;
             height: 14px;
             background: linear-gradient(
-                90deg,
-                #001f12,
-                #064e3b,
-                #00ff7f,
-                #22c55e,
-                #ccff00,
-                #00ff7f,
-                #064e3b,
-                #001f12                
-            );
-            background-size: 450% 100%;
-            animation: greenFlow 3.5s linear infinite, greenGlowPulse 2.8s ease-in-out infinite;
-            border-radius: 0 0 12px 12px;
-            margin-top: -4px;
-            box-shadow:
-                0 4px 12px rgba(34, 197, 94, 0.45),
-                0 0 18px rgba(0, 255, 127, 0.30),
-                inset 0 -2px 6px rgba(255, 255, 255, 0.20);
-            margin-bottom: 4px;
-        }
+            90deg,
+            #001f12,
+            #064e3b,
+            #22c55e,
+            #ccff00,
+            #22c55e,
+            #064e3b,
+            #001f12
+        );
+        background-size: 350% 100%;
+        animation: greenFlow 5s linear infinite;
+        border-radius: 0 0 14px 14px;
+        margin-top: -6px;
+        margin-bottom: 6px;
+        box-shadow:
+            0 4px 12px rgba(34, 197, 94, 0.35),
+            0 0 14px rgba(34, 197, 94, 0.25);
+    }
         
         /* Restore original sidebar background */
         section[data-testid="stSidebar"] {
@@ -1231,6 +1229,33 @@ section[data-testid="stSidebar"] .how-text {
     color: #111827 !important;
     line-height: 1.7 !important;
     font-weight: 700 !important;
+}
+
+.block-container {
+    padding-top: 0.35rem !important;
+    padding-bottom: 0.2rem !important;
+}
+
+.hero-wrap {
+    margin-bottom: 6px !important;
+    padding: 10px !important;
+}
+
+.feature-pill-wrap {
+    margin: 6px 0 8px 0 !important;
+}
+
+.trust-bar {
+    margin: 6px 0 8px 0 !important;
+    padding: 8px 12px !important;
+}
+
+.status-chip-wrap {
+    margin: 6px 0 10px 0 !important;
+}
+
+div[data-testid="stTabs"] {
+    margin-top: 8px !important;
 }
         </style>
         """,
@@ -2421,6 +2446,7 @@ def set_user_plan(plan):
 def is_premium():
     return get_user_plan() == PREMIUM_PLAN
 
+
 # =========================================================
 # MAIN
 # =========================================================
@@ -3141,7 +3167,26 @@ def main() -> None:
         """,
         unsafe_allow_html=True,
     )
-
+def render_footer():
+    current_year = datetime.now().year
+    st.markdown(
+        f"""
+        <div style="
+            width:100%;
+            text-align:center;
+            font-size:0.66rem;
+            color:#94a3b8;
+            margin-top:24px;
+            margin-bottom:2px;
+            padding-bottom:2px;
+            opacity:0.85;
+        ">
+            © {current_year} ExplainMyData AI. All Rights Reserved.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    render_footer()
 
 if __name__ == "__main__":
     main()
