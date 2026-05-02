@@ -36,3 +36,16 @@ support/
 *.pdf
 *.png
 *.jpg
+
+.venv/
+venv/
+
+git status
+git add app.py webhook.py requirements.txt .gitignore .env.example README.md edai_logo.png
+git commit -m "Prepare ExplainMyData AI for production"
+git branch -M main
+git remote set-url origin https://github.com/saintoup36/explain-my-data-ai.git
+git push -u origin main
+
+git remote add origin https://github.com/saintoup36/explain-my-data-ai.git
+git push -u origin main
