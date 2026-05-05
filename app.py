@@ -59,6 +59,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+st.success("VERSION CHECK - NEW CODE IS RUNNING")
 st.success("VERSION CHECK: import os fix is live - 2026-05-05")
 st.write("APP STARTED")
 
