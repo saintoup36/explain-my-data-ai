@@ -1,4 +1,3 @@
-import os
 import io
 import json
 import uuid
@@ -28,6 +27,7 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
 from sklearn.linear_model import LinearRegression
 
+
 try:
     from docx import Document
 except Exception:
@@ -48,7 +48,6 @@ try:
 except Exception:
     OpenAI = None
 
-
 # =========================================================
 # CONFIG
 # =========================================================
@@ -58,6 +57,8 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+st.write("APP STARTED")
 
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env", override=True)
