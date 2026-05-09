@@ -2455,6 +2455,7 @@ def parse_uploaded_file(uploaded_file) -> Tuple[pd.DataFrame, str, str]:
         df = pd.DataFrame(
             {"image_width": [image.size[0]], "image_height": [image.size[1]]}
         )
+        df = df.loc[:, ~df.columns.duplicated()].copy()
         st.session_state["ocr_preview"] = image
         st.session_state["ocr_text"] = text
         return df, "image", text
@@ -2464,7 +2465,6 @@ def parse_uploaded_file(uploaded_file) -> Tuple[pd.DataFrame, str, str]:
         return zip_df, "text", zip_text
 
     raise ValueError("Unsupported file type.")
-
 
 def save_uploaded_file_for_user(email: str, uploaded_file) -> Optional[Path]:
     if not email or uploaded_file is None:
@@ -2686,24 +2686,35 @@ Duplicate rows: {duplicates_after}
 # =========================================================
 # FORECASTING
 # =========================================================
-def prepare_forecast_dataframe(
-    df: pd.DataFrame,
-    date_col: str,
-    value_col: str,
-) -> pd.DataFrame:
-    working = df[[date_col, value_col]].copy()
+def prepare_forecast_dataframe(df, date_col, value_col):
+    working = df.copy()
+
+    # Remove duplicate column names safely
+    working = working.loc[:, ~working.columns.duplicated()].copy()
+
+    if date_col not in working.columns:
+        st.error(f"Date column '{date_col}' was not found. Please choose another date column.")
+        return pd.DataFrame()
+
+    if value_col not in working.columns:
+        st.error(f"Value column '{value_col}' was not found. Please choose another value column.")
+        return pd.DataFrame()
+
     working[date_col] = pd.to_datetime(working[date_col], errors="coerce")
     working[value_col] = pd.to_numeric(working[value_col], errors="coerce")
-    working = working.dropna()
+
+    working = working.dropna(subset=[date_col, value_col])
+
     if working.empty:
-        return working
-    working = (
+        return pd.DataFrame()
+
+    grouped = (
         working.groupby(date_col, as_index=False)[value_col]
         .sum()
         .sort_values(date_col)
     )
-    return working
 
+    return grouped
 
 def build_forecast_ml(
     grouped_df: pd.DataFrame,
