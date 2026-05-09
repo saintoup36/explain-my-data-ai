@@ -633,26 +633,6 @@ def process_stripe_return() -> None:
     """
     return None
 
-def request_checkout_session(email: str):
-    checkout_backend_url = "http://localhost:8013/create-checkout-session"
-
-    try:
-        response = requests.post(
-            checkout_backend_url,
-            json={"email": email},
-            timeout=10,
-        )
-
-        if response.status_code == 200:
-            checkout_url = response.json().get("url")
-            if checkout_url:
-                return True, checkout_url
-
-        return False, f"Checkout backend error: {response.status_code} - {response.text}"
-
-    except Exception as exc:
-        return False, f"Could not connect to checkout backend: {exc}"
-
 def render_upgrade_checkout_button():
     email = (st.session_state.get("user_email") or current_user_email()).strip().lower()
 
@@ -665,6 +645,8 @@ def render_upgrade_checkout_button():
                 st.link_button("Continue to Stripe Checkout", result)
             else:
                 st.error(result)
+    
+        st.write("Using Payment Link Checkout")
 
 def safe_remove_tree(path: Path) -> None:
     if path.exists() and path.is_dir():
@@ -2894,6 +2876,22 @@ def load_user_reports(email: str) -> List[dict]:
             continue
     return results
 
+def create_checkout_session(plan_type):
+    if plan_type == "monthly":
+        url = os.getenv("STRIPE_PAYMENT_LINK_SUBSCRIPTION")
+
+    elif plan_type == "one_time":
+        url = os.getenv("STRIPE_PAYMENT_LINK_ONE_TIME")
+
+    else:
+        st.error("Invalid plan.")
+        return
+
+    if not url:
+        st.error("Stripe payment link missing.")
+        return
+
+    st.link_button("Continue to Stripe Checkout", url)
 
 def create_shareable_report_link(
     email: str,
@@ -3567,6 +3565,7 @@ def main() -> None:
         st.write(f"{t('ai_configured')}:", t("yes") if ai_available() else t("no"))
         st.write(f"{t('auth_configured')}:", t("yes") if auth_configured() else t("no"))
         st.slider(t("usage_count_label"), 0, 10, key="usage_count")
+        st.write("SUPABASE URL:", os.getenv("SUPABASE_URL"))
 
     tabs = st.tabs([
         f"📊 {t('dashboard')}", f"🤖 {t('ai_dashboard')}", f"🧠 {t('data_doctor')}", f"🧭 {t('decision_engine')}", f"🧪 {t('scenario_simulator')}", f"💬 {t('ask_data')}",
