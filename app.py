@@ -8,7 +8,6 @@ import locale
 import shutil
 import hashlib
 import base64
-import requests
 from pathlib import Path
 from datetime import datetime
 from typing import List, Optional, Tuple
@@ -69,10 +68,6 @@ SUPPORT_EMAIL = os.getenv("SUPPORT_EMAIL", "support@explainmydata.ai")
 APP_BASE_URL = os.getenv("APP_BASE_URL", "").strip()
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "").strip()
-CHECKOUT_BACKEND_URL = os.getenv(
-    "CHECKOUT_BACKEND_URL",
-    "http://localhost:8013/create-checkout-session",
-).strip()
 PREMIUM_USERS = {
     email.strip().lower()
     for email in os.getenv("PREMIUM_USERS", "").split(",")
@@ -634,19 +629,25 @@ def process_stripe_return() -> None:
     return None
 
 def render_upgrade_checkout_button():
-    email = (st.session_state.get("user_email") or current_user_email()).strip().lower()
+    """Render Stripe Payment Link buttons without calling a local checkout backend."""
+    monthly_url = os.getenv("STRIPE_PAYMENT_LINK_SUBSCRIPTION", "").strip()
+    one_time_url = os.getenv("STRIPE_PAYMENT_LINK_ONE_TIME", "").strip()
 
-    if st.button("💎 " + t("upgrade_title"), key="upgrade_checkout_session_btn"):
-        if not email:
-            st.warning("Please log in first.")
-        else:
-            ok, result = request_checkout_session(email)
-            if ok:
-                st.link_button("Continue to Stripe Checkout", result)
-            else:
-                st.error(result)
-    
-        st.write("Using Payment Link Checkout")
+    if is_premium_user():
+        st.success(t("premium_access_active"))
+        return
+
+    if monthly_url:
+        st.link_button("💎 Monthly Premium", monthly_url, use_container_width=True)
+    else:
+        st.warning("Monthly Stripe payment link is missing.")
+
+    if one_time_url:
+        st.link_button("💳 One-Time Access", one_time_url, use_container_width=True)
+    else:
+        st.warning("One-time Stripe payment link is missing.")
+
+    st.info("To cancel or change your plan, contact support.")
 
 def safe_remove_tree(path: Path) -> None:
     if path.exists() and path.is_dir():
@@ -888,7 +889,7 @@ def inject_global_css() -> None:
 .sidebar-title {
     font-size: 0.85rem;
     font-weight: 700;
-    color: #6b7280;
+    color: #d1d5db;
     margin-bottom: 6px;
     text-transform: uppercase;
     letter-spacing: 0.5px;
@@ -992,10 +993,12 @@ box-shadow: none !important;
             border: 1px solid #d1d5db !important;
         }
         .hero-tagline-line {
-            font-size: 1.05rem;
-            font-weight: 700;
-            color: #0c4a6e;
+            font-size: 1.08rem;
+            font-weight: 800;
+            color: #e5f4ff !important;
             margin-top: 4px;
+            letter-spacing: 0.01em;
+            text-shadow: 0 2px 10px rgba(0,0,0,0.35);
         }
 
         .hero-welcome {
@@ -1881,6 +1884,30 @@ section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] hr {
     height: 0 !important;
     margin: 0 !important;
     border: 0 !important;
+}
+
+
+
+/* ===== FINAL HERO READABILITY + ELITE POLISH ===== */
+.hero-tagline-line {
+    color: #e5f4ff !important;
+    font-weight: 850 !important;
+    text-shadow: 0 2px 12px rgba(0,0,0,0.38) !important;
+}
+
+.hero-wrap {
+    background: linear-gradient(135deg, rgba(15,23,42,0.92), rgba(6,78,59,0.74)) !important;
+    border: 1px solid rgba(34,197,94,0.30) !important;
+}
+
+.hero-brand-line {
+    color: #7ee787 !important;
+    text-shadow: 0 2px 14px rgba(0,0,0,0.35) !important;
+}
+
+.status-chip {
+    background: rgba(255,255,255,0.11) !important;
+    border-color: rgba(255,255,255,0.14) !important;
 }
 
 /* Keep the small FREE/PREMIUM badge white */
