@@ -637,33 +637,21 @@ def render_upgrade_checkout_button():
         st.success(t("premium_access_active"))
         return
 
-    st.markdown("### 💎 Monthly Premium")
-    st.caption("Premium access billed monthly. Cancel anytime.")
-
+    st.caption("Monthly plan: billed monthly. Cancel anytime.")
     if monthly_url:
-        st.link_button("🚀 Subscribe Monthly", monthly_url, use_container_width=True)
+        st.link_button("💎 Monthly Premium", monthly_url, use_container_width=True)
     else:
         st.warning("Monthly Stripe payment link is missing.")
 
-    st.markdown("---")
-
-    st.markdown("### 💳 Lifetime Access")
-    st.caption("One-time payment. No monthly fees.")
-
+    st.caption("Lifetime plan: one-time payment. No monthly fees.")
     if one_time_url:
-        st.link_button("🔥 Unlock Lifetime Access", one_time_url, use_container_width=True)
+        st.link_button("💳 Lifetime Access", one_time_url, use_container_width=True)
     else:
         st.warning("One-time Stripe payment link is missing.")
 
     st.caption("Secure payments powered by Stripe.")
 
-    if monthly_url:
-        st.link_button(
-            "🚀 Subscribe Monthly",
-            monthly_url,
-            use_container_width=True
-        )
-    
+
 def safe_remove_tree(path: Path) -> None:
     if path.exists() and path.is_dir():
         shutil.rmtree(path, ignore_errors=True)
