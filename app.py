@@ -129,7 +129,7 @@ def init_state() -> None:
     defaults = {
         "authenticated": False,
         "auth_user": None,
-        "auth_mode": "local-demo",
+        "auth_mode": "not-authenticated",
         "user_email": "",
         "is_premium": False,
         "stripe_last_payment": "",
