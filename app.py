@@ -1980,6 +1980,12 @@ footer *,
 
 @media (max-width: 768px) {
     .block-container {
+        padding-top: 4rem !important;
+    }
+}
+
+@media (max-width: 768px) {
+    .block-container {
         padding-top: 3.2rem !important;
     }
 
