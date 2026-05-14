@@ -49,3 +49,8 @@ git push -u origin main
 
 git remote add origin https://github.com/saintoup36/explain-my-data-ai.git
 git push -u origin main
+
+.env
+.env_test
+*.env
+.streamlit/secrets.toml
