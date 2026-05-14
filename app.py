@@ -630,7 +630,6 @@ def process_stripe_return() -> None:
 
 def render_upgrade_checkout_button():
     """Render Stripe Payment Link buttons without calling a local checkout backend."""
-    
     monthly_url = os.getenv("STRIPE_PAYMENT_LINK_SUBSCRIPTION", "").strip()
     one_time_url = os.getenv("STRIPE_PAYMENT_LINK_ONE_TIME", "").strip()
 
@@ -638,40 +637,25 @@ def render_upgrade_checkout_button():
         st.success(t("premium_access_active"))
         return
 
-    # ---------------------------
-    # MONTHLY PLAN
-    # ---------------------------
-    st.markdown(
-        """
-        <div style="
-            background: rgba(255,255,255,0.70);
-            border-radius: 14px;
-            padding: 12px;
-            margin-bottom: 12px;
-            border: 1px solid rgba(0,0,0,0.06);
-        ">
-            <div style="
-                font-size:1rem;
-                font-weight:900;
-                color:#111827;
-                margin-bottom:4px;
-            ">
-                💎 Monthly Premium
-            </div>
+    st.markdown("### 💎 Monthly Premium")
+    st.caption("Premium access billed monthly. Cancel anytime.")
 
-            <div style="
-                font-size:0.82rem;
-                color:#374151;
-                font-weight:700;
-                line-height:1.5;
-                margin-bottom:10px;
-            ">
-                Premium access billed monthly. Cancel anytime.
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    if monthly_url:
+        st.link_button("🚀 Subscribe Monthly", monthly_url, use_container_width=True)
+    else:
+        st.warning("Monthly Stripe payment link is missing.")
+
+    st.markdown("---")
+
+    st.markdown("### 💳 Lifetime Access")
+    st.caption("One-time payment. No monthly fees.")
+
+    if one_time_url:
+        st.link_button("🔥 Unlock Lifetime Access", one_time_url, use_container_width=True)
+    else:
+        st.warning("One-time Stripe payment link is missing.")
+
+    st.caption("Secure payments powered by Stripe.")
 
     if monthly_url:
         st.link_button(
@@ -679,70 +663,7 @@ def render_upgrade_checkout_button():
             monthly_url,
             use_container_width=True
         )
-    else:
-        st.warning("Monthly Stripe payment link is missing.")
-
-    st.markdown("<div style='height:10px;'></div>", unsafe_allow_html=True)
-
-    # ---------------------------
-    # LIFETIME PLAN
-    # ---------------------------
-    st.markdown(
-        """
-        <div style="
-            background: rgba(255,255,255,0.70);
-            border-radius: 14px;
-            padding: 12px;
-            margin-bottom: 12px;
-            border: 1px solid rgba(0,0,0,0.06);
-        ">
-            <div style="
-                font-size:1rem;
-                font-weight:900;
-                color:#111827;
-                margin-bottom:4px;
-            ">
-                💳 Lifetime Access
-            </div>
-
-            <div style="
-                font-size:0.82rem;
-                color:#374151;
-                font-weight:700;
-                line-height:1.5;
-                margin-bottom:10px;
-            ">
-                One-time payment. No monthly fees.
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    if one_time_url:
-        st.link_button(
-            "🔥 Unlock Lifetime Access",
-            one_time_url,
-            use_container_width=True
-        )
-    else:
-        st.warning("One-time Stripe payment link is missing.")
-
-    st.markdown(
-        """
-        <div style="
-            margin-top:12px;
-            font-size:0.75rem;
-            color:#6b7280;
-            font-weight:700;
-            text-align:center;
-        ">
-            Secure payments powered by Stripe.
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
+    
 def safe_remove_tree(path: Path) -> None:
     if path.exists() and path.is_dir():
         shutil.rmtree(path, ignore_errors=True)
