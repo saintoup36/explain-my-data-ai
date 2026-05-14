@@ -3525,7 +3525,7 @@ def main() -> None:
                     placeholder=t("email_placeholder"),
                     key="sidebar_auth_email",
                 )
-
+            
                 sidebar_password = st.text_input(
                     t("password"),
                     placeholder=t("password_placeholder"),
@@ -3540,6 +3540,16 @@ def main() -> None:
                         st.rerun()
                     else:
                         render_message(msg, "error")
+                
+                if st.button(t("logout"), key="sidebar_logout_btn", use_container_width=True):
+                    st.session_state["authenticated"] = False
+                    st.session_state["auth_user"] = None
+                    st.session_state["auth_session"] = None
+                    st.session_state["auth_mode"] = "not-authenticated"
+                    st.session_state["user_email"] = ""
+                    st.session_state["is_premium"] = False
+                    set_user_plan(FREE_PLAN)
+                    st.rerun()
 
                 if st.button("Create Account", key="show_signup_form_btn", use_container_width=True):
                     st.session_state["show_signup_form"] = True
