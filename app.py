@@ -61,13 +61,26 @@ st.set_page_config(
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env", override=True)
 
+
+def read_config(name: str, default: str = "") -> str:
+    """Read configuration from .env first, then Streamlit secrets."""
+    value = os.getenv(name, "").strip()
+    if value:
+        return value
+    try:
+        secret_value = st.secrets.get(name, default)
+        return str(secret_value).strip() if secret_value is not None else default
+    except Exception:
+        return default
+
+
 APP_NAME = "ExplainMyData AI"
 TAGLINE = "Your data, clearly explained"
-DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-5")
-SUPPORT_EMAIL = os.getenv("SUPPORT_EMAIL", "support@explainmydata.ai")
-APP_BASE_URL = os.getenv("APP_BASE_URL", "").strip()
-SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
-SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "").strip()
+DEFAULT_MODEL = read_config("OPENAI_MODEL", "gpt-5")
+SUPPORT_EMAIL = read_config("SUPPORT_EMAIL", "support@explainmydata.ai")
+APP_BASE_URL = read_config("APP_BASE_URL", "").strip()
+SUPABASE_URL = read_config("SUPABASE_URL", "").strip().rstrip("/")
+SUPABASE_ANON_KEY = read_config("SUPABASE_ANON_KEY", "").strip()
 PREMIUM_USERS = {
     email.strip().lower()
     for email in os.getenv("PREMIUM_USERS", "").split(",")
@@ -77,7 +90,7 @@ TESSERACT_PATH = os.getenv(
     "TESSERACT_PATH",
     r"C:\Program Files\Tesseract-OCR\tesseract.exe",
 )
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+OPENAI_API_KEY = read_config("OPENAI_API_KEY", "").strip()
 LOGO_PATH = BASE_DIR / "edai_logo.png"
 FREE_ANALYSIS_LIMIT = 2
 MAX_UPLOAD_MB = 200
@@ -630,8 +643,8 @@ def process_stripe_return() -> None:
 
 def render_upgrade_checkout_button():
     """Render Stripe Payment Link buttons without calling a local checkout backend."""
-    monthly_url = os.getenv("STRIPE_PAYMENT_LINK_SUBSCRIPTION", "").strip()
-    one_time_url = os.getenv("STRIPE_PAYMENT_LINK_ONE_TIME", "").strip()
+    monthly_url = read_config("STRIPE_PAYMENT_LINK_SUBSCRIPTION", "").strip()
+    one_time_url = read_config("STRIPE_PAYMENT_LINK_ONE_TIME", "").strip()
 
     if is_premium_user():
         st.success(t("premium_access_active"))
@@ -2134,6 +2147,7 @@ def render_data_handling_notice() -> None:
 # AUTH
 # =========================================================
 def local_login(email: str, password: str) -> Tuple[bool, str]:
+    """Sign in with Supabase Auth only. No local/demo fallback."""
     if not email or not password:
         return False, "Please enter your email and password."
 
@@ -2153,26 +2167,28 @@ def local_login(email: str, password: str) -> Tuple[bool, str]:
         if user is None:
             return False, "Login failed. Please check your email and password."
 
+        user_id = getattr(user, "id", None)
         st.session_state["authenticated"] = True
         st.session_state["auth_user"] = {
             "email": email,
-            "id": getattr(user, "id", None),
+            "id": user_id,
         }
         st.session_state["auth_session"] = session
         st.session_state["auth_mode"] = "supabase"
         st.session_state["user_email"] = email
-        st.session_state["sidebar_auth_password"] = ""
-        return False, "Login failed. Please check your email and password."
 
-        ensure_user_profile(email)
+        ensure_user_profile(email, user_id=user_id)
         load_user_profile(email)
 
         return True, "Logged in successfully."
 
-    except Exception:
+    except Exception as exc:
+        print("Supabase login error:", exc)
         return False, "Login failed. Please check your email and password."
 
+
 def local_create_account(email: str, password: str) -> Tuple[bool, str]:
+    """Create a real Supabase Auth account only. No local/demo fallback."""
     if not email or not password:
         return False, "Please enter your email and password."
 
@@ -2190,64 +2206,30 @@ def local_create_account(email: str, password: str) -> Tuple[bool, str]:
         session = getattr(response, "session", None)
 
         if user is None:
-            st.session_state["sidebar_auth_password"] = ""
             return False, "Account creation failed. Please try again."
 
+        user_id = getattr(user, "id", None)
         st.session_state["authenticated"] = True
         st.session_state["auth_user"] = {
             "email": email,
-            "id": getattr(user, "id", None),
+            "id": user_id,
         }
         st.session_state["auth_session"] = session
         st.session_state["auth_mode"] = "supabase"
         st.session_state["user_email"] = email
-       
-        ensure_user_profile(email)
+
+        ensure_user_profile(email, user_id=user_id)
         load_user_profile(email)
+
+        if session is None:
+            return True, "Account created. Please check your email to confirm your account, then log in."
 
         return True, "Account created successfully."
 
-    except Exception:
-        return False, "Account creation failed. This email may already exist or the password may be too weak."
+    except Exception as exc:
+        print("Supabase signup error:", exc)
+        return False, "Account creation failed. This email may already exist, the password may be too weak, or Supabase settings may need attention."
 
-def local_create_account(email: str, password: str) -> Tuple[bool, str]:
-    if not email or not password:
-        return False, "Please enter your email and password."
-
-    email = email.strip().lower()
-    supabase_client = get_supabase_client()
-
-    if supabase_client is None:
-        return False, "Account creation is not configured. Please check Supabase settings."
-
-    try:
-        response = supabase_client.auth.sign_up(
-            {"email": email, "password": password}
-        )
-        user = getattr(response, "user", None)
-        session = getattr(response, "session", None)
-
-        if user is None:
-            st.session_state["sidebar_auth_password"] = ""
-            return False, "Account creation failed. Please try again."
-
-        st.session_state["authenticated"] = True
-        st.session_state["auth_user"] = {
-            "email": email,
-            "id": getattr(user, "id", None),
-        }
-        st.session_state["auth_session"] = session
-        st.session_state["auth_mode"] = "supabase"
-        st.session_state["user_email"] = email
-        
-        ensure_user_profile(email)
-        load_user_profile(email)
-
-        return True, "Account created successfully."
-
-    except Exception:
-        st.session_state["sidebar_auth_password"] = ""
-        return False, "Account creation failed. This email may already exist or the password may be too weak."
 
 def send_password_reset(email: str) -> Tuple[bool, str]:
     """Send a Supabase password reset email when Supabase auth is configured."""
@@ -2276,11 +2258,15 @@ def send_password_reset(email: str) -> Tuple[bool, str]:
         return False, f"Password reset failed: {exc}"
 
 
-def ensure_user_profile(email: str) -> None:
-    """Create a Supabase profile row for the signed-in user if it does not already exist."""
+def ensure_user_profile(email: str, user_id: Optional[str] = None) -> None:
+    """Create or update a Supabase profile row for the signed-in user."""
     email = (email or st.session_state.get("user_email", "")).strip().lower()
     if not email:
         return
+
+    if user_id is None:
+        auth_user = st.session_state.get("auth_user") or {}
+        user_id = auth_user.get("id")
 
     st.session_state["user_email"] = email
 
@@ -2291,18 +2277,28 @@ def ensure_user_profile(email: str) -> None:
     try:
         existing = (
             supabase_client.table("user_profiles")
-            .select("email")
+            .select("id,email,is_premium")
             .eq("email", email)
             .execute()
         )
 
-        if not existing.data:
-            supabase_client.table("user_profiles").insert(
-                {
-                    "email": email,
-                    "is_premium": False,
-                }
-            ).execute()
+        if existing.data:
+            update_data = {"email": email, "updated_at": now_iso()}
+            if user_id:
+                update_data["id"] = user_id
+            supabase_client.table("user_profiles").update(update_data).eq("email", email).execute()
+            return
+
+        insert_data = {
+            "email": email,
+            "is_premium": False,
+            "updated_at": now_iso(),
+        }
+        if user_id:
+            insert_data["id"] = user_id
+
+        supabase_client.table("user_profiles").insert(insert_data).execute()
+
     except Exception as exc:
         print("Error ensuring user profile:", exc)
 
