@@ -857,23 +857,7 @@ def inject_global_css() -> None:
             visibility: hidden;
         }
 
-        header {
-            visibility: hidden;
-        }
-
-        [data-testid="stToolbar"] {
-            display: none;
-        }
-
         [data-testid="stDecoration"] {
-            display: none;
-        }
-
-        [data-testid="stStatusWidget"] {
-            display: none;
-        }
-
-        [data-testid="stDeployButton"] {
             display: none;
         }
 
