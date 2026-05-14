@@ -2185,6 +2185,9 @@ def local_login(email: str, password: str) -> Tuple[bool, str]:
     except Exception as exc:
         print("Supabase login error:", exc)
         return False, "Login failed. Please check your email and password."
+    
+    except Exception as e:
+        return False, f"Login failed: {e}"
 
 
 def local_create_account(email: str, password: str) -> Tuple[bool, str]:
@@ -2229,6 +2232,9 @@ def local_create_account(email: str, password: str) -> Tuple[bool, str]:
     except Exception as exc:
         print("Supabase signup error:", exc)
         return False, "Account creation failed. This email may already exist, the password may be too weak, or Supabase settings may need attention."
+    
+    except Exception as e:
+        return False, f"Account creation failed: {e}"
 
 
 def send_password_reset(email: str) -> Tuple[bool, str]:
