@@ -1576,6 +1576,28 @@ section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {
     color: #ffffff !important;
 }
 
+footer {
+    visibility: hidden !important;
+    display: none !important;
+}
+
+footer:after {
+    content: "" !important;
+    display: none !important;
+}
+
+[data-testid="stFooter"] {
+    visibility: hidden !important;
+    display: none !important;
+}
+
+.viewerBadge_container__1QSob,
+.viewerBadge_link__1S137,
+.viewerBadge_text__1JaDK {
+    display: none !important;
+    visibility: hidden !important;
+}
+
 .sidebar-control-title {
     font-size: 1rem !important;
     font-weight: 950 !important;
@@ -1937,6 +1959,38 @@ section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] hr {
 .status-chip {
     background: rgba(255,255,255,0.11) !important;
     border-color: rgba(255,255,255,0.14) !important;
+}
+
+footer,
+footer *,
+[data-testid="stFooter"],
+[data-testid="stFooter"] *,
+.viewerBadge_container__1QSob,
+.viewerBadge_link__1S137,
+.viewerBadge_text__1JaDK,
+.viewerBadge_container__r5tak,
+.viewerBadge_link__qRIco,
+.viewerBadge_text__1JaDK {
+    display: none !important;
+    visibility: hidden !important;
+    height: 0 !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+}
+
+@media (max-width: 768px) {
+    .block-container {
+        padding-top: 3.2rem !important;
+    }
+
+    [data-testid="collapsedControl"] {
+        top: 0.75rem !important;
+        left: 0.75rem !important;
+        background: rgba(255, 255, 255, 0.95) !important;
+        border-radius: 999px !important;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.18) !important;
+        z-index: 999999 !important;
+    }
 }
 
 /* Keep the small FREE/PREMIUM badge white */
