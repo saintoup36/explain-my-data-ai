@@ -2146,8 +2146,18 @@ def render_data_handling_notice() -> None:
 # =========================================================
 # AUTH
 # =========================================================
+def _safe_load_profile_after_auth(email: str) -> None:
+    """Load/create app profile after auth, but never let profile errors break login."""
+    try:
+        ensure_user_profile(email)
+        load_user_profile(email)
+    except Exception as exc:
+        print("Profile load/create error after auth:", exc)
+        st.session_state["is_premium"] = False
+        set_user_plan(FREE_PLAN)
+
+
 def local_login(email: str, password: str) -> Tuple[bool, str]:
-    """Sign in with Supabase Auth only. No local/demo fallback."""
     if not email or not password:
         return False, "Please enter your email and password."
 
@@ -2155,43 +2165,37 @@ def local_login(email: str, password: str) -> Tuple[bool, str]:
     supabase_client = get_supabase_client()
 
     if supabase_client is None:
-        return False, "Login is not configured. Please check Supabase settings."
+        return False, "Login is not configured. Check SUPABASE_URL and SUPABASE_ANON_KEY."
 
     try:
         response = supabase_client.auth.sign_in_with_password(
             {"email": email, "password": password}
         )
+
         user = getattr(response, "user", None)
         session = getattr(response, "session", None)
 
         if user is None:
-            return False, "Login failed. Please check your email and password."
+            return False, "Login failed. Supabase did not return a user."
 
-        user_id = getattr(user, "id", None)
         st.session_state["authenticated"] = True
         st.session_state["auth_user"] = {
             "email": email,
-            "id": user_id,
+            "id": getattr(user, "id", None),
         }
         st.session_state["auth_session"] = session
         st.session_state["auth_mode"] = "supabase"
         st.session_state["user_email"] = email
 
-        ensure_user_profile(email, user_id=user_id)
-        load_user_profile(email)
+        _safe_load_profile_after_auth(email)
 
         return True, "Logged in successfully."
 
     except Exception as exc:
-        print("Supabase login error:", exc)
-        return False, "Login failed. Please check your email and password."
-    
-    except Exception as e:
-        return False, f"Login failed: {e}"
+        return False, f"Login failed: {exc}"
 
 
 def local_create_account(email: str, password: str) -> Tuple[bool, str]:
-    """Create a real Supabase Auth account only. No local/demo fallback."""
     if not email or not password:
         return False, "Please enter your email and password."
 
@@ -2199,42 +2203,37 @@ def local_create_account(email: str, password: str) -> Tuple[bool, str]:
     supabase_client = get_supabase_client()
 
     if supabase_client is None:
-        return False, "Account creation is not configured. Please check Supabase settings."
+        return False, "Account creation is not configured. Check SUPABASE_URL and SUPABASE_ANON_KEY."
 
     try:
         response = supabase_client.auth.sign_up(
             {"email": email, "password": password}
         )
+
         user = getattr(response, "user", None)
         session = getattr(response, "session", None)
 
         if user is None:
-            return False, "Account creation failed. Please try again."
+            return False, "Account creation failed. Supabase did not return a user."
 
-        user_id = getattr(user, "id", None)
-        st.session_state["authenticated"] = True
-        st.session_state["auth_user"] = {
-            "email": email,
-            "id": user_id,
-        }
-        st.session_state["auth_session"] = session
         st.session_state["auth_mode"] = "supabase"
         st.session_state["user_email"] = email
+        st.session_state["auth_user"] = {
+            "email": email,
+            "id": getattr(user, "id", None),
+        }
+        st.session_state["auth_session"] = session
 
-        ensure_user_profile(email, user_id=user_id)
-        load_user_profile(email)
+        if session is not None:
+            st.session_state["authenticated"] = True
+            _safe_load_profile_after_auth(email)
+            return True, "Account created and logged in successfully."
 
-        if session is None:
-            return True, "Account created. Please check your email to confirm your account, then log in."
-
-        return True, "Account created successfully."
+        st.session_state["authenticated"] = False
+        return True, "Account created. Please check your email to confirm your account before logging in."
 
     except Exception as exc:
-        print("Supabase signup error:", exc)
-        return False, "Account creation failed. This email may already exist, the password may be too weak, or Supabase settings may need attention."
-    
-    except Exception as e:
-        return False, f"Account creation failed: {e}"
+        return False, f"Account creation failed: {exc}"
 
 
 def send_password_reset(email: str) -> Tuple[bool, str]:
