@@ -166,6 +166,7 @@ def init_state() -> None:
         "loaded_filename": "",
         "raw_text": "",
         "data_mode": "structured",
+        "show_signup_form": False,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -3512,50 +3513,133 @@ def main() -> None:
                 logout()
                 st.rerun()
         else:
+            show_signup = bool(st.session_state.get("show_signup_form", False))
+            card_title = "Create Account" if show_signup else t("welcome_back")
+            card_subtitle = (
+                "Create a secure account to save reports and unlock premium access."
+                if show_signup
+                else t("login_subtitle")
+            )
+
             st.markdown(
                 f"""
                 <div class="login-card">
-                    <div class="login-title">{html.escape(t('welcome_back'))}</div>
-                    <div class="login-subtitle">{html.escape(t('login_subtitle'))}</div>
+                    <div class="login-title">{html.escape(card_title)}</div>
+                    <div class="login-subtitle">{html.escape(card_subtitle)}</div>
                     <div class="secure-pill">🔐 {html.escape(t('secure_workspace'))}</div>
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
-            sidebar_email = st.text_input(
-                t("email"),
-                placeholder=t("email_placeholder"),
-                key="sidebar_auth_email",
+
+            if not show_signup:
+                sidebar_email = st.text_input(
+                    t("email"),
+                    placeholder=t("email_placeholder"),
+                    key="sidebar_auth_email",
+                )
+                sidebar_password = st.text_input(
+                    t("password"),
+                    placeholder=t("password_placeholder"),
+                    type="password",
+                    key="sidebar_auth_password",
+                )
+                login_col, create_col = st.columns(2)
+                with login_col:
+                    if st.button(t("login"), key="sidebar_login_btn", use_container_width=True):
+                        ok, msg = local_login(sidebar_email, sidebar_password)
+                        if ok:
+                            render_message(msg, "success")
+                            st.rerun()
+                        else:
+                            render_message(msg, "error")
+                
+if "show_signup_form" not in st.session_state:
+    st.session_state["show_signup_form"] = False
+
+if not st.session_state["show_signup_form"]:
+
+    if st.button(
+        t("login"),
+        key="sidebar_login_btn",
+        use_container_width=True,
+    ):
+        ok, msg = local_login(sidebar_email, sidebar_password)
+
+        if ok:
+            render_message(msg, "success")
+            st.rerun()
+        else:
+            render_message(msg, "error")
+
+    if st.button(
+        "Create Account",
+        key="show_signup_form_btn",
+        use_container_width=True,
+    ):
+        st.session_state["show_signup_form"] = True
+        st.rerun()
+
+else:
+
+    st.markdown("### Create your account")
+
+    signup_email = st.text_input(
+        "Email",
+        placeholder="Type your email",
+        key="signup_email",
+    )
+
+    signup_password = st.text_input(
+        "Password",
+        placeholder="Create a password",
+        type="password",
+        key="signup_password",
+    )
+
+    signup_confirm_password = st.text_input(
+        "Confirm Password",
+        placeholder="Retype your password",
+        type="password",
+        key="signup_confirm_password",
+    )
+
+    if st.button(
+        "Create My Account",
+        key="create_account_submit_btn",
+        use_container_width=True,
+    ):
+
+        if signup_password != signup_confirm_password:
+            render_message("Passwords do not match.", "error")
+
+        else:
+            ok, msg = local_create_account(
+                signup_email,
+                signup_password,
             )
-            sidebar_password = st.text_input(
-                t("password"),
-                placeholder=t("password_placeholder"),
-                type="password",
-                key="sidebar_auth_password",
-            )
-            login_col, create_col = st.columns(2)
-            with login_col:
-                if st.button(t("login"), key="sidebar_login_btn", use_container_width=True):
-                    ok, msg = local_login(sidebar_email, sidebar_password)
-                    if ok:
-                        render_message(msg, "success")
+
+            if ok:
+                render_message(msg, "success")
+                st.session_state["show_signup_form"] = False
+                st.rerun()
+
+            else:
+                render_message(msg, "error")
+
+    if st.button(
+        "Back to Login",
+        key="back_to_login_btn",
+        use_container_width=True,
+    ):
+        st.session_state["show_signup_form"] = False
+        st.rerun()
+
+                with back_col:
+                    if st.button("Back to Login", key="sidebar_back_to_login_btn", use_container_width=True):
+                        st.session_state["show_signup_form"] = False
                         st.rerun()
-                    else:
-                        render_message(msg, "error")
-            with create_col:
-                if st.button(t("create"), key="sidebar_create_btn", use_container_width=True):
-                    ok, msg = local_create_account(sidebar_email, sidebar_password)
-                    if ok:
-                        render_message(msg, "success")
-                        st.rerun()
-                    else:
-                        render_message(msg, "error")
-            if st.button(t("forgot_password"), key="sidebar_forgot_password_btn", use_container_width=True):
-                ok, msg = send_password_reset(sidebar_email)
-                if ok:
-                    render_message(msg, "success")
-                else:
-                    render_message(msg, "warning")
+
         st.markdown('</div>', unsafe_allow_html=True)
 
         # -------------------
