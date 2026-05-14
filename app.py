@@ -834,6 +834,34 @@ def inject_global_css() -> None:
             padding-top: 0.5rem !important;
             padding-bottom: 0.4rem !important;
         }
+                
+        #MainMenu {
+            visibility: hidden;
+        }
+        
+        footer {
+            visibility: hidden;
+        }
+
+        header {
+            visibility: hidden;
+        }
+
+        [data-testid="stToolbar"] {
+            display: none;
+        }
+
+        [data-testid="stDecoration"] {
+            display: none;
+        }
+
+        [data-testid="stStatusWidget"] {
+            display: none;
+        }
+
+        [data-testid="stDeployButton"] {
+            display: none;
+        }
 
         .hero-wrap {
             border: 1px solid rgba(34,197,94,0.25);
@@ -2133,8 +2161,8 @@ def local_login(email: str, password: str) -> Tuple[bool, str]:
         st.session_state["auth_session"] = session
         st.session_state["auth_mode"] = "supabase"
         st.session_state["user_email"] = email
-        st.session_state["sidebar_auth_email"] = ""
         st.session_state["sidebar_auth_password"] = ""
+        return False, "Login failed. Please check your email and password."
 
         ensure_user_profile(email)
         load_user_profile(email)
@@ -2142,9 +2170,7 @@ def local_login(email: str, password: str) -> Tuple[bool, str]:
         return True, "Logged in successfully."
 
     except Exception:
-        st.session_state["sidebar_auth_password"] = ""
         return False, "Login failed. Please check your email and password."
-
 
 def local_create_account(email: str, password: str) -> Tuple[bool, str]:
     if not email or not password:
@@ -2175,18 +2201,14 @@ def local_create_account(email: str, password: str) -> Tuple[bool, str]:
         st.session_state["auth_session"] = session
         st.session_state["auth_mode"] = "supabase"
         st.session_state["user_email"] = email
-        st.session_state["sidebar_auth_email"] = ""
-        st.session_state["sidebar_auth_password"] = ""
-
+       
         ensure_user_profile(email)
         load_user_profile(email)
 
         return True, "Account created successfully."
 
     except Exception:
-        st.session_state["sidebar_auth_password"] = ""
         return False, "Account creation failed. This email may already exist or the password may be too weak."
-
 
 def local_create_account(email: str, password: str) -> Tuple[bool, str]:
     if not email or not password:
@@ -2217,9 +2239,7 @@ def local_create_account(email: str, password: str) -> Tuple[bool, str]:
         st.session_state["auth_session"] = session
         st.session_state["auth_mode"] = "supabase"
         st.session_state["user_email"] = email
-        st.session_state["sidebar_auth_email"] = ""
-        st.session_state["sidebar_auth_password"] = ""
-
+        
         ensure_user_profile(email)
         load_user_profile(email)
 
